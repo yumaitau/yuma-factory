@@ -1,0 +1,41 @@
+{
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": {
+    "FACTORY_URL": "https://factory.yumait.au",
+    "LABEL_PREFIX": "yuma",
+    "COMMIT_AUTHOR_NAME": "Yuma Factory",
+    "COMMIT_AUTHOR_EMAIL": "factory@yumait.au",
+  },
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "yuma-factory-sandbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "rules": [{ "type": "Text", "globs": ["**/scripts/*.mjs"], "fallthrough": true }],
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      "instance_type": "standard-1",
+      "max_instances": 20,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "Sandbox",
+        "name": "Sandbox",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["Sandbox"],
+      "tag": "v1",
+    },
+  ],
+  "r2_buckets": [
+    { "binding": "CODEX_VAULT", "bucket_name": "yuma-factory-codex-vault" },
+  ],
+}

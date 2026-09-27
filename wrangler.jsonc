@@ -1,0 +1,60 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "yuma-factory",
+  "main": "worker.ts",
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "queues": {
+    "producers": [{ "binding": "FACTORY_EVENTS", "queue": "yuma-factory-events" }],
+    "consumers": [{ "queue": "yuma-factory-events", "max_batch_size": 10, "max_batch_timeout": 1,
+      "max_concurrency": 1, "max_retries": 20, "retry_delay": 30, "dead_letter_queue": "yuma-factory-events-failed" }]
+  },
+  "secrets": { "required": ["SANDBOX_RUNNER_SECRET"] },
+  "compatibility_date": "2026-09-09",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS",
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "yuma-factory",
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "yuma-factory",
+      "database_id": "64398b5f-a38d-47b1-8204-c535840e94ef",
+      "migrations_dir": "drizzle",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "yuma-factory-artifacts",
+    },
+    {
+      "binding": "NEXT_INC_CACHE_R2_BUCKET",
+      "bucket_name": "yuma-factory-cache",
+    },
+  ],
+  "routes": [
+    {
+      "pattern": "factory.yumait.au",
+      "custom_domain": true,
+    },
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 },
+  },
+  "placement": { "mode": "smart" },
+  "limits": { "cpu_ms": 60000 },
+  "vars": {
+    "ALLOWED_EMAIL_DOMAINS": "yumait.com.au,yumait.au",
+    "TRUSTED_ORIGINS": "https://yuma-factory.yuma-it.workers.dev",
+    "PAPERBOY_API_URL": "https://paperboy.yumait.au",
+    "PAPERBOY_FROM": "Yuma Factory <factory@yumait.au>",
+  },
+}

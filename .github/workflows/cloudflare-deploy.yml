@@ -1,0 +1,139 @@
+name: Cloudflare Worker deploy
+'on':
+  push:
+    branches:
+    - main
+  pull_request: {}
+  workflow_dispatch:
+    inputs:
+      update_container_image:
+        description: Replace container image/configuration (restarts active jobs)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: cloudflare-deploy-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  deploy:
+    # GitHub-hosted only: self-hosted runners would execute fork pull requests on org machines.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+    - uses: actions/checkout@v4
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10.11.0
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: pnpm
+        cache-dependency-path: pnpm-lock.yaml
+    - name: Install locked dependencies
+      run: pnpm install --frozen-lockfile
+    - name: Check
+      run: pnpm test && pnpm typecheck && pnpm lint
+    - name: Build Worker
+      env:
+        # Build-time branding; must match LABEL_PREFIX in sandbox-runner/wrangler.jsonc.
+        NEXT_PUBLIC_APP_NAME: Yuma Factory
+        NEXT_PUBLIC_LABEL_PREFIX: yuma
+      run: pnpm exec opennextjs-cloudflare build
+    - name: Require current main revision
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      run: test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
+    - name: Apply D1 migrations
+      # Before deploying: new code must never run against an older schema.
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.YUMAIT_CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: 3eed46cc48f123cdff00d116df5e5070
+      run: 'test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing shared organisation deploy token"; exit 1; }
+
+        pnpm exec wrangler d1 migrations apply DB --remote'
+    - name: Deploy with shared organisation token
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.YUMAIT_CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: 3eed46cc48f123cdff00d116df5e5070
+        OPEN_NEXT_DEPLOY: 'true'
+      run: 'test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing shared organisation deploy token"; exit 1; }
+
+        pnpm exec opennextjs-cloudflare deploy --name yuma-factory --keep-vars --tag "${GITHUB_SHA:0:7}" --message "$GITHUB_SHA"'
+    - name: Verify live Factory homepage
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      run: |
+        curl --fail --silent --show-error --location --max-time 30 \
+          --retry 5 --retry-delay 5 --retry-all-errors \
+          https://factory.yumait.au/ --output /tmp/factory-home.html
+        grep -q '<title>Yuma Factory</title>' /tmp/factory-home.html
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Detect sandbox source changes
+      id: changes
+      working-directory: .
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        UPDATE_CONTAINER_IMAGE: ${{ inputs.update_container_image }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      run: |
+        # Web-only releases must not restart containers running customer jobs.
+        if [ "$EVENT_NAME" = workflow_dispatch ] || [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+        elif git diff --quiet "$BASE_SHA" HEAD -- sandbox-runner shared; then
+          echo 'changed=false' >> "$GITHUB_OUTPUT"
+        else
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+        fi
+        # Scripts ship with the Worker and install on the next job start.
+        # Container config changes require an explicit image rollout dispatch.
+        if [[ "$UPDATE_CONTAINER_IMAGE" = true || ( "$EVENT_NAME" != workflow_dispatch && ( -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ) ) ]]; then
+          echo 'rollout=gradual' >> "$GITHUB_OUTPUT"
+        elif [ "$EVENT_NAME" != workflow_dispatch ] && ! git diff --quiet "$BASE_SHA" HEAD -- sandbox-runner/Dockerfile sandbox-runner/package.json sandbox-runner/pnpm-lock.yaml; then
+          echo 'rollout=gradual' >> "$GITHUB_OUTPUT"
+        else
+          echo 'rollout=none' >> "$GITHUB_OUTPUT"
+        fi
+    - uses: pnpm/action-setup@v4
+      if: steps.changes.outputs.changed == 'true'
+      with:
+        version: 10.11.0
+    - uses: actions/setup-node@v4
+      if: steps.changes.outputs.changed == 'true'
+      with:
+        node-version: '22'
+        cache: pnpm
+        cache-dependency-path: sandbox-runner/pnpm-lock.yaml
+    - name: Install locked dependencies
+      if: steps.changes.outputs.changed == 'true'
+      run: pnpm install --frozen-lockfile
+    - name: Build Worker
+      if: steps.changes.outputs.changed == 'true'
+      run: pnpm run typecheck
+    - name: Require current main revision
+      if: steps.changes.outputs.changed == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      run: test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
+    - name: Deploy with shared organisation token
+      if: steps.changes.outputs.changed == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.YUMAIT_CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: 3eed46cc48f123cdff00d116df5e5070
+        OPEN_NEXT_DEPLOY: 'true'
+      run: 'test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing shared organisation deploy token"; exit 1; }
+
+        pnpm exec wrangler deploy --name yuma-factory-sandbox --containers-rollout=${{ steps.changes.outputs.rollout }} --keep-vars --tag "${GITHUB_SHA:0:7}" --message "$GITHUB_SHA"'
+    defaults:
+      run:
+        working-directory: sandbox-runner

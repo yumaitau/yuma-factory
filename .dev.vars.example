@@ -1,0 +1,38 @@
+NEXTJS_ENV=development
+BETTER_AUTH_SECRET=replace-with-at-least-32-random-bytes
+BETTER_AUTH_URL=http://localhost:3000
+# Google Workspace domains allowed to sign in (comma-separated). Empty rejects everyone.
+ALLOWED_EMAIL_DOMAINS=example.com
+# Optional extra origins trusted by Better Auth (comma-separated).
+TRUSTED_ORIGINS=
+
+# Google Workspace SSO (Better Auth). Redirect URI in Google Cloud:
+#   {BETTER_AUTH_URL}/api/auth/callback/google
+GOOGLE_CLIENT_ID=required-google-workspace-oauth-client-id
+GOOGLE_CLIENT_SECRET=required-google-workspace-oauth-client-secret
+
+# GitHub App (ticket intake + PR creation). All required together.
+# Callback URL:  {BETTER_AUTH_URL}/api/github/callback
+# Webhook URL:   {BETTER_AUTH_URL}/api/github/webhook
+GITHUB_APP_ID=
+GITHUB_APP_PRIVATE_KEY=
+GITHUB_APP_CLIENT_ID=
+GITHUB_APP_CLIENT_SECRET=
+GITHUB_APP_SLUG=
+GITHUB_APP_WEBHOOK_SECRET=
+
+# Sandbox runner Worker (separate deployment; see sandbox-runner/).
+SANDBOX_RUNNER_URL=
+SANDBOX_RUNNER_SECRET=
+
+# Optional morning digest through PaperBoy (https://github.com/yumaitau/paperboy).
+# The digest is disabled unless all three are set.
+PAPERBOY_API_URL=
+PAPERBOY_API_KEY=
+PAPERBOY_FROM=
+PAPERBOY_DIGEST_TO=
+
+# Machine access to /api/v1 and /api/mcp. Sessions still work for browsers.
+FACTORY_API_KEY=
+
+E2E_DISABLE_AUTH_RATE_LIMIT=1

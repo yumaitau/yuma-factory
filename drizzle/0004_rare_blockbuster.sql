@@ -1,0 +1,1 @@
+ALTER TABLE `codex_accounts` ADD `enabled` integer DEFAULT true NOT NULL;

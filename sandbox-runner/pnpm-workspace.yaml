@@ -1,0 +1,5 @@
+# Standalone project — the sandbox runner is deployed as its own Cloudflare
+# Worker, independent of the main app's install. Empty packages list makes this
+# its own workspace root rather than deferring to the parent Factory app.
+packages: []
+dangerouslyAllowAllBuilds: true

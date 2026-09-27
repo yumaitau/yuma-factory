@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.open-next/
+.wrangler/
+.dev.vars
+.env
+.env.local
+playwright-report/
+test-results/
+.playwright/
+*.log
+*.tsbuildinfo
+.DS_Store
+
+set-secrets.sh
+SECRETS.local.md

@@ -70,6 +70,21 @@ export async function getInstallationByGithubId(installationId: number) {
 
 /* -------------------------------- Projects ------------------------------- */
 
+/** Retire projects whose repository is archived or no longer shared with the installation. */
+export async function archiveProjectsExcept(installationRowId: string, activeRepoIds: number[]) {
+  const db = await getDb();
+  const keep = activeRepoIds.length ? sql`${projects.repoId} not in (${sql.join(activeRepoIds.map((id) => sql`${id}`), sql`, `)})` : sql`1 = 1`;
+  const archived = await db.update(projects).set({ status: "archived", updatedAt: new Date() })
+    .where(and(eq(projects.installationId, installationRowId), eq(projects.status, "active"), keep))
+    .returning({ repo: projects.repoFullName });
+  return archived.map((row) => row.repo);
+}
+
+export async function listInstallations() {
+  const db = await getDb();
+  return db.select().from(githubInstallations).all();
+}
+
 export async function upsertProject(input: {
   installationRowId: string;
   repoId: number;
@@ -94,6 +109,7 @@ export async function upsertProject(input: {
     createdAt: now,
     updatedAt: now,
   }).onConflictDoUpdate({ target: [projects.repoId], set: {
+    status: "active",
     repoFullName: input.repoFullName,
     defaultBranch: input.defaultBranch,
     description: input.description,

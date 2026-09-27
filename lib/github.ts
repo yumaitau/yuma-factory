@@ -53,6 +53,7 @@ export type RepoSummary = {
   defaultBranch: string;
   description: string | null;
   private: boolean;
+  archived: boolean;
 };
 
 /** List repositories the installation can access. */
@@ -73,6 +74,7 @@ export async function listInstallationRepos(installationId: number): Promise<Rep
       default_branch: string;
       description: string | null;
       private: boolean;
+      archived?: boolean;
     }>) {
       repos.push({
         repoId: repo.id,
@@ -80,6 +82,7 @@ export async function listInstallationRepos(installationId: number): Promise<Rep
         defaultBranch: repo.default_branch,
         description: repo.description,
         private: repo.private,
+        archived: !!repo.archived,
       });
     }
   }

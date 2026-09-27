@@ -5,6 +5,9 @@ import { planInstructions } from '@/lib/plan';
 
 export const PROMPT_LIMIT = 38_000;
 
+// Factory refuses to publish CI configuration, and CI installs from lockfiles.
+export const CI_RULES = 'Never modify .github/workflows or .github/actions: Factory will not publish those changes. If CI fails because of its own configuration or infrastructure (for example an unavailable image or missing secret), explain that in your summary instead. When dependencies change, update every lockfile the repository uses (for example bun.lock, pnpm-lock.yaml, yarn.lock and package-lock.json) with the matching package manager.';
+
 export type PromptInput = {
   mode: 'implement' | 'plan';
   issueNumber: number;
@@ -24,7 +27,7 @@ export function buildRunPrompt(input: PromptInput) {
   const agent = input.agentPrompt ? clip(input.agentPrompt, 4_000) : '';
   const rules = input.mode === 'plan'
     ? `${planInstructions()} Do not commit, push, create pull requests, access credentials, or modify files outside the repository.`
-    : 'Inspect the repository, implement the requested change, and run relevant tests. Keep changes scoped. Do not commit, push, create pull requests, access credentials, or modify files outside the repository. Finish with a concise summary of changes and actual test results.';
+    : `Inspect the repository, implement the requested change, and run relevant tests. Keep changes scoped. ${CI_RULES} Do not commit, push, create pull requests, access credentials, or modify files outside the repository. Finish with a concise summary of changes and actual test results.`;
   const epic = input.epic ? [
     `This ticket is part of epic #${input.epic.number}: ${input.epic.title}. Stay within this ticket's scope; sibling tickets cover the rest.`,
     clip(input.epic.body ?? '', 4_000),

@@ -10,7 +10,7 @@ import {
   createAgent,
   getInstallationByGithubId,
   getProject,
-  archiveProjectsExcept,
+  archiveProjects,
   listInstallations,
   getTicketWithContext,
   listProjects,
@@ -34,7 +34,8 @@ export async function importReposAction(installationGithubId: number) {
   if (!installation)
     throw new Error("Installation not found. Connect GitHub first.");
 
-  const repos = (await listInstallationRepos(installationGithubId)).filter((repo) => !repo.archived);
+  const listed = await listInstallationRepos(installationGithubId);
+  const repos = listed.filter((repo) => !repo.archived);
   for (const repo of repos) {
     await upsertProject({
       installationRowId: installation.id,
@@ -45,7 +46,7 @@ export async function importReposAction(installationGithubId: number) {
       private: repo.private,
     });
   }
-  const archived = await archiveProjectsExcept(installation.id, repos.map((repo) => repo.repoId));
+  const archived = await archiveProjects(installation.id, listed.filter((repo) => repo.archived).map((repo) => repo.repoId));
   revalidatePath("/");
   return { imported: repos.length, archived };
 }

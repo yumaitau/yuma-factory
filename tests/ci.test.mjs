@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateCI, finishCommitCI, isReviewBot, finishWithGreenCI, isLowRisk, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest, requiredChecks } from "../sandbox-runner/scripts/ci.mjs";
+import { evaluateCI, finishCommitCI, isCiConfigPath, isReviewBot, finishWithGreenCI, isLowRisk, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest, requiredChecks } from "../sandbox-runner/scripts/ci.mjs";
 
 test("CI requires reported checks and waits for pending work", () => {
   assert.equal(evaluateCI([], [], []).state, "pending");
@@ -305,4 +305,9 @@ test("a default branch without any pipeline completes after 10 minutes", async (
   });
   assert.equal(sha, "merge");
   assert.equal(closed, 1);
+});
+
+test("CI workflow and action files are never published by the agent", () => {
+  for (const path of [".github/workflows/ci.yml", ".github/actions/setup/action.yml", ".GitHub/Workflows/x.yml"]) assert.equal(isCiConfigPath(path), true, path);
+  for (const path of [".github/CODEOWNERS", "src/.github/workflows/x.yml", "workflows/ci.yml", ""]) assert.equal(isCiConfigPath(path), false, path);
 });

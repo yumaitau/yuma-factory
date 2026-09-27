@@ -1,12 +1,12 @@
 import { getEnv } from "@/lib/env";
+import { secretMatches } from "@/lib/factory-auth";
 import { completeCodexRun } from "@/lib/agent/run";
 import { validId, type RunResult } from "@/shared/codex";
 import { enqueuePickup } from '@/lib/automation-queue';
 export async function POST(request: Request) {
   const env = await getEnv();
   if (
-    !env.SANDBOX_RUNNER_SECRET ||
-    request.headers.get("x-runner-secret") !== env.SANDBOX_RUNNER_SECRET
+    !secretMatches(request.headers.get("x-runner-secret"), env.SANDBOX_RUNNER_SECRET)
   )
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   const data = (await request.json()) as { id: string; result: RunResult };

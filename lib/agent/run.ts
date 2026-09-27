@@ -40,7 +40,7 @@ export async function startCodexRun(
   if (!context?.installation || !agent || agent.status === "disabled")
     throw new Error("Ticket or agent is unavailable.");
   // Check installation permissions before claiming a ticket or subscription.
-  const githubToken = await getInstallationToken(context.installation.installationId, true);
+  const githubToken = await getInstallationToken(context.installation.installationId, true, context.project.repoId);
   const mode = isPlanTicket(context.ticket) ? "plan" : "implement";
   // Pre-run hydrate: ranked memory plus the epic's goal, siblings and thread.
   const memory = await memoriesForTicket(db, context.project.id, `${context.ticket.title}\n${context.ticket.body ?? ""}`);

@@ -17,6 +17,7 @@ import {
 import { runnerRequest } from "@/lib/codex/runner";
 import {
   validateAuthFile,
+  validId,
   type RunResult,
   type AccountStatus,
 } from "@/shared/codex";
@@ -176,6 +177,8 @@ export async function testCodexStatusAction(id: string, runId: string) {
   return actionResult(async () => {
     const session = await requireSession();
     await ownedAccount(id, session.user.id);
+    // runId is interpolated into the runner path; anything else could traverse to other resources.
+    if (!validId(runId)) throw new Error("Invalid test run.");
     const result = await runnerRequest<RunResult>(
       `/runs/${runId}?accountId=${id}`,
     );

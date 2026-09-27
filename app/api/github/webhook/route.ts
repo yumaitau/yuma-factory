@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { projects, tickets } from '@/db/schema';
 import { getDb } from '@/lib/db';
@@ -74,7 +74,7 @@ async function handleIssueEvent(payload: {
   const now = new Date();
   const { newId } = await import('@/lib/ids');
   // Subtasks carry a plan marker, so one created just before a crash still joins its epic.
-  const link = await planLinkForBody(db, payload.issue.body);
+  const link = await planLinkForBody(db, payload.issue.body, project.id);
   await db.insert(tickets).values({
     id: newId('tkt'),
     projectId: project.id,
@@ -91,7 +91,9 @@ async function handleIssueEvent(payload: {
     updatedAt: now,
   }).onConflictDoUpdate({ target: [tickets.projectId, tickets.githubIssueNumber], set: {
     title: payload.issue.title, body: payload.issue.body, labels: JSON.stringify(labels),
-    githubState: payload.issue.state, htmlUrl: payload.issue.html_url, ...(link ?? {}), updatedAt: now,
+    githubState: payload.issue.state, htmlUrl: payload.issue.html_url, updatedAt: now,
+    // An established parent never changes on an edit.
+    ...(link ? { parentTicketId: sql`coalesce(${tickets.parentTicketId}, ${link.parentTicketId})`, planTask: sql`coalesce(${tickets.planTask}, ${link.planTask})` } : {}),
   } });
   return true;
 }

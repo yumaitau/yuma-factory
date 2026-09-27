@@ -11,6 +11,7 @@ import { availableAccounts } from '@/lib/codex/accounts';
 import { forEachConcurrent, planAssignments } from '@/lib/concurrency';
 import { planLinkForBody, reconcileEpics, resumeStalePlans } from '@/lib/collab-store';
 import { LABELS } from '@/lib/brand';
+import { approvalHistory, staleApproval } from '@/lib/approval';
 
 /** One durable lease covers cron and manual checks. Interrupted checks can resume after expiry. */
 export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' = 'pickup') {
@@ -94,7 +95,7 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
             });
           }
           for (const issue of issues.filter((item) => item.body?.includes('factory-plan-task:'))) {
-            const link = await planLinkForBody(db, issue.body);
+            const link = await planLinkForBody(db, issue.body, project.id);
             if (link) await db.update(tickets).set(link)
               .where(and(eq(tickets.projectId, project.id), eq(tickets.githubIssueNumber, issue.number), sql`${tickets.planTask} is null`));
           }
@@ -145,6 +146,9 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
             await db.update(tickets).set({ githubState: data.state, labels: JSON.stringify(labels),
               title: data.title, body: data.body ?? null, updatedAt: new Date() }).where(eq(tickets.id, ticket.id));
             if (data.state !== 'open' || data.pull_request || !labels.some((label) => [settings.label.toLowerCase(), LABELS.plan].includes(label?.toLowerCase() ?? ''))) return;
+            // Fail closed: text changed by anyone but the approver needs a fresh label.
+            const stale = staleApproval(await approvalHistory(client.graphql, owner, repo, ticket.githubIssueNumber), [settings.label, LABELS.plan]);
+            if (stale) throw new Error(`${project.repoFullName}#${ticket.githubIssueNumber}: ${stale}`);
             await startCodexRun(ticket.id, agent.id, agent.modelId ?? 'codex-default', settings.userId,
               { automationLabel: settings.label, automationLeaseId: leaseId });
             runsStarted++;

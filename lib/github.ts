@@ -161,11 +161,12 @@ export async function createPullRequest(input: {
  * Mint a short-lived installation access token. The sandbox uses this as the
  * git credential to clone/push; it expires in ~1h and is never persisted.
  */
-export async function getInstallationToken(installationId: number, requireCI = false): Promise<string> {
+/** `repositoryId` limits the token to one repository, e.g. for a sandboxed run. */
+export async function getInstallationToken(installationId: number, requireCI = false, repositoryId?: number): Promise<string> {
   const app = getGithubApp();
   const { data } = await app.octokit.request(
     'POST /app/installations/{installation_id}/access_tokens',
-    { installation_id: installationId },
+    { installation_id: installationId, ...(repositoryId ? { repository_ids: [repositoryId] } : {}) },
   );
   if (requireCI && (
     !data.permissions?.administration || !data.permissions?.checks || !data.permissions?.actions || !data.permissions?.statuses ||
@@ -177,9 +178,13 @@ export async function getInstallationToken(installationId: number, requireCI = f
   return data.token;
 }
 
-/** Build the GitHub App installation URL users click to connect repos. */
-export function getInstallUrl(): string {
+/** GitHub App installation URL; `state` comes back to the setup callback. */
+export function getInstallUrl(state?: string): string {
   const creds = githubAppCredentials(getEnv());
   if (!creds) throw new Error('GitHub App is not configured.');
-  return `https://github.com/apps/${creds.slug}/installations/new`;
+  const url = `https://github.com/apps/${creds.slug}/installations/new`;
+  return state ? `${url}?state=${encodeURIComponent(state)}` : url;
 }
+
+// Ties the post-install callback to an install this browser started from Factory.
+export const INSTALL_STATE_COOKIE = 'factory_github_install';

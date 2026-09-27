@@ -57,6 +57,11 @@ export async function captureLearnings(db: Db, input: { projectId: string; runId
   const status = project?.autoLearn === false ? 'suggested' : 'active';
   for (const learning of learnings) {
     const now = new Date();
+    // One run may learn or reinforce a memory once; repeating itself is not rediscovery.
+    const existing = await db.select({ id: memories.id, sourceRunId: memories.sourceRunId }).from(memories)
+      .where(and(eq(memories.scopeKey, input.projectId), eq(memories.contentKey, memoryContentKey(learning.content)))).get();
+    if (existing && (existing.sourceRunId === input.runId || await db.select({ id: memoryEvents.id }).from(memoryEvents)
+      .where(and(eq(memoryEvents.memoryId, existing.id), eq(memoryEvents.actor, `run:${input.runId}`))).get())) continue;
     const [row] = await db.insert(memories).values({
       id: newId('mem'), projectId: input.projectId, scopeKey: input.projectId, contentKey: memoryContentKey(learning.content),
       kind: learning.kind, content: learning.content, status, source: 'agent',

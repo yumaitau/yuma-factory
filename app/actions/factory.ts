@@ -10,6 +10,8 @@ import {
   createAgent,
   getInstallationByGithubId,
   getProject,
+  archiveProjectsExcept,
+  listInstallations,
   getTicketWithContext,
   listProjects,
   setTicketLabels,
@@ -32,7 +34,7 @@ export async function importReposAction(installationGithubId: number) {
   if (!installation)
     throw new Error("Installation not found. Connect GitHub first.");
 
-  const repos = await listInstallationRepos(installationGithubId);
+  const repos = (await listInstallationRepos(installationGithubId)).filter((repo) => !repo.archived);
   for (const repo of repos) {
     await upsertProject({
       installationRowId: installation.id,
@@ -43,8 +45,15 @@ export async function importReposAction(installationGithubId: number) {
       private: repo.private,
     });
   }
+  const archived = await archiveProjectsExcept(installation.id, repos.map((repo) => repo.repoId));
   revalidatePath("/");
-  return { imported: repos.length };
+  return { imported: repos.length, archived };
+}
+
+/** Re-read every connected installation, e.g. after granting the App access to more repositories. */
+export async function refreshReposAction() {
+  await requireSession();
+  for (const installation of await listInstallations()) await importReposAction(installation.installationId);
 }
 
 /** Pull open issues for a project into tickets. */

@@ -1,7 +1,9 @@
 import { connection } from 'next/server';
 import { Suspense } from 'react';
 
+import { refreshReposAction } from '@/app/actions/factory';
 import { AppShell } from '@/components/factory/app-shell';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { ConnectGithub } from '@/components/factory/connect-github';
 import { ProjectBrowser } from '@/components/factory/project-browser';
 import { AutomationPanel } from '@/components/factory/automation-panel';
@@ -38,6 +40,15 @@ async function Dashboard() {
             Connected repositories. Each card shows open tickets by workflow stage.
           </p>
         </div>
+        {projects.length > 0 && installUrl ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Grant the App more repositories on GitHub, then refresh to import them. */}
+            <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={installUrl}>Add repositories on GitHub</a>
+            <form action={refreshReposAction}>
+              <Button type="submit" variant="outline" size="sm">Refresh repositories</Button>
+            </form>
+          </div>
+        ) : null}
       </div>
 
       <AutomationPanel status={worker} userId={session.user.id} />

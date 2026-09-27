@@ -27,7 +27,7 @@ export function parsePlan(raw: unknown): Plan {
     const list = (value: unknown, max: number) => Array.isArray(value)
       ? [...new Set(value.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean))].slice(0, max)
       : [];
-    return { key, title, body: text(task.body, 6000), dependsOn: list(task.dependsOn, MAX_PLAN_TASKS).map((dep) => dep.toLowerCase()), files: list(task.files, 30) };
+    return { key, title, body: stripMarkers(text(task.body, 6000)), dependsOn: list(task.dependsOn, MAX_PLAN_TASKS).map((dep) => dep.toLowerCase()), files: list(task.files, 30) };
   });
   const keys = new Set<string>();
   for (const task of tasks) {
@@ -75,9 +75,12 @@ export function planTaskId(planId: string, key: string) {
   return `${planId}:${key}`;
 }
 
+/** Only the trailing marker Factory writes counts; markers pasted elsewhere are ignored. */
 export function planTaskFromBody(body: string | null | undefined) {
-  return /<!-- factory-plan-task:([a-z]+_[a-f0-9]{32}:[a-z0-9][a-z0-9-]*) -->/.exec(body ?? '')?.[1] ?? null;
+  return /(?:^|\n)<!-- factory-plan-task:([a-z]+_[a-f0-9]{32}:[a-z0-9][a-z0-9-]*) -->\s*$/.exec(body ?? '')?.[1] ?? null;
 }
+
+const stripMarkers = (value: string) => value.replace(/<!--\s*factory-plan-task:[^>]*-->/gi, '');
 
 export function subtaskIssueBody(task: PlanTask, epicNumber: number, issueByKey: Map<string, number>, planId: string) {
   const deps = task.dependsOn.map((dep) => issueByKey.get(dep)).filter((value): value is number => !!value);

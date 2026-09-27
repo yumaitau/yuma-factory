@@ -60,7 +60,8 @@ async function Dashboard() {
 
 function safeInstallUrl(): string | null {
   try {
-    return getInstallUrl();
+    getInstallUrl();
+    return '/api/github/install';
   } catch {
     return null;
   }

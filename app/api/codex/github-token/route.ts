@@ -3,6 +3,7 @@ import { codexAccounts, runs } from "@/db/schema";
 import { reserveRunAccount } from "@/lib/codex/accounts";
 import { getDb } from "@/lib/db";
 import { getEnv } from "@/lib/env";
+import { secretMatches } from "@/lib/factory-auth";
 import { getInstallationToken } from "@/lib/github";
 import { getTicketWithContext } from "@/lib/queries";
 import { validId, type AccountStatus } from "@/shared/codex";
@@ -11,7 +12,7 @@ import { mintRunToken } from "@/lib/run-token";
 /** Renew only the installation credential belonging to an active runner job. */
 export async function POST(request: Request) {
   const env = getEnv();
-  if (!env.SANDBOX_RUNNER_SECRET || request.headers.get("x-runner-secret") !== env.SANDBOX_RUNNER_SECRET)
+  if (!secretMatches(request.headers.get("x-runner-secret"), env.SANDBOX_RUNNER_SECRET))
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   const { id, accountId, action = "renew", accountStatus } = await request.json() as { id: string; accountId: string; action?: string; accountStatus?: AccountStatus };
   if (!["renew", "resume", "pause"].includes(action))
@@ -38,11 +39,11 @@ export async function POST(request: Request) {
   const context = await getTicketWithContext(run.ticketId);
   if (!context?.installation)
     return Response.json({ error: "Installation unavailable" }, { status: 409 });
-  const token = await getInstallationToken(context.installation.installationId, true);
+  const token = await getInstallationToken(context.installation.installationId, true, context.project.repoId);
   if (!await reserveRunAccount(accountId, run.requestedByUserId, id, action === "resume", db))
     return Response.json({ error: "Subscription is busy, disabled or needs reconnecting. Recovery will retry." }, { status: 409 });
   // The run token opens this run's live channel (/api/runs/mcp); it dies with the run.
-  return Response.json({ token, issuedAt: Date.now(), runToken: mintRunToken(id, env.SANDBOX_RUNNER_SECRET) }, {
+  return Response.json({ token, issuedAt: Date.now(), runToken: mintRunToken(id, env.SANDBOX_RUNNER_SECRET!) }, {
     headers: { "Cache-Control": "no-store" },
   });
 }

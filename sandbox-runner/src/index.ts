@@ -60,9 +60,18 @@ async function storeAuth(env: Env, id: string, auth: string) {
     }),
   );
 }
-async function restore(env: Env, id: string, sb: ReturnType<typeof sandbox>) {
+/** Constant-time comparison of digests, so timing reveals nothing about the secret. */
+async function secretMatches(supplied: string | null, expected: string | undefined) {
+  if (!supplied || !expected) return false;
+  const digest = async (value: string) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  const [a, b] = await Promise.all([digest(supplied), digest(expected)]);
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+async function load(env: Env, id: string) {
   const obj = await env.CODEX_VAULT.get(`accounts/${id}`);
-  if (!obj) throw new Error("Subscription is not connected.");
+  if (!obj) return null;
   const v = await obj.json<{ iv: number[]; data: number[] }>();
   const decoded = await crypto.subtle.decrypt(
     {
@@ -73,8 +82,13 @@ async function restore(env: Env, id: string, sb: ReturnType<typeof sandbox>) {
     await key(env),
     new Uint8Array(v.data),
   );
+  return new TextDecoder().decode(decoded);
+}
+async function restore(env: Env, id: string, sb: ReturnType<typeof sandbox>) {
+  const auth = await load(env, id);
+  if (!auth) throw new Error("Subscription is not connected.");
   await sb.mkdir(home, { recursive: true });
-  await sb.writeFile(`${home}/auth.json`, new TextDecoder().decode(decoded));
+  await sb.writeFile(`${home}/auth.json`, auth);
 }
 async function read<T>(
   sb: ReturnType<typeof sandbox>,
@@ -93,8 +107,21 @@ async function read<T>(
     return null;
   }
 }
-async function persist(env: Env, id: string, sb: ReturnType<typeof sandbox>) {
+/**
+ * After a run, auth.json is agent-writable. Only refreshed tokens for the same
+ * ChatGPT account may replace the vault copy; a swapped-in login is discarded.
+ */
+async function persist(env: Env, id: string, sb: ReturnType<typeof sandbox>, sameAccount = false) {
   const file = await sb.readFile(`${home}/auth.json`);
+  if (sameAccount) {
+    const stored = await load(env, id);
+    const accountOf = (raw: string | null) => {
+      try { return raw ? (JSON.parse(raw) as { tokens?: { account_id?: unknown } }).tokens?.account_id : undefined; } catch { return undefined; }
+    };
+    const previous = accountOf(stored);
+    if (typeof previous !== "string" || accountOf(file.content) !== previous)
+      throw new Error("Codex login changed account during the run. Vault copy kept.");
+  }
   await storeAuth(env, id, file.content);
 }
 async function metadata(sb: ReturnType<typeof sandbox>) {
@@ -138,12 +165,12 @@ async function recover(env: Env, id: string, accountId: string, cancel = false) 
           await sb.exec("chmod 600 /factory/github-token.tmp && mv /factory/github-token.tmp /factory/github-token.json");
         }
         // Keep refreshed subscription credentials durable during long CI waits.
-        await persist(env, accountId, sb).catch(() => {});
+        await persist(env, accountId, sb, true).catch(() => {});
       }
       return { result, running, progress: await read<RunResult>(sb, "progress") };
     },
     pause: async (result) => {
-      await beforeStop(() => persist(env, accountId, sb));
+      await beforeStop(() => persist(env, accountId, sb, true));
       // Destroy first: the subscription must not be released while code can run.
       await sb.destroy();
       const response = await fetch(`${env.FACTORY_URL}/api/codex/github-token`, {
@@ -170,7 +197,7 @@ async function recover(env: Env, id: string, accountId: string, cancel = false) 
   }, Date.now(), cancel);
   if (result.status !== 'running') {
     if (result.status === 'succeeded') {
-      await persist(env, accountId, sb).catch(() => {});
+      await persist(env, accountId, sb, true).catch(() => {});
     }
     await env.CODEX_VAULT.put(`results/${id}`, JSON.stringify({ accountId, result }));
     if (result.status === 'succeeded') await sb.destroy();
@@ -182,10 +209,7 @@ const worker = {
     const url = new URL(request.url);
     if (url.pathname === "/health")
       return Response.json({ ok: true, provider: "codex" });
-    if (
-      !env.RUNNER_SHARED_SECRET ||
-      request.headers.get("x-runner-secret") !== env.RUNNER_SHARED_SECRET
-    )
+    if (!(await secretMatches(request.headers.get("x-runner-secret"), env.RUNNER_SHARED_SECRET)))
       return Response.json({ error: "Unauthorised" }, { status: 401 });
     const parts = url.pathname.split("/").filter(Boolean);
     const [resource, id, action] = parts;
@@ -401,7 +425,7 @@ const worker = {
           }
           if (req) {
             try {
-              await persist(env, accountId, sb);
+              await persist(env, accountId, sb, true);
             } catch {
               result.accountStatus = {
                 status: "error",

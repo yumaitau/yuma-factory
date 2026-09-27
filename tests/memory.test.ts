@@ -95,3 +95,25 @@ test('run channel tokens are bound to one run and one secret', async () => {
   assert.equal(runIdFromToken(`${runId}.forged`, 'secret'), null);
   assert.equal(runIdFromToken(null, 'secret'), null);
 });
+
+test('pickup approval covers only the text the approver saw', async () => {
+  const { staleApproval } = await import('../lib/approval');
+  const base = { labeled: [{ label: 'yuma:ready', actor: 'maintainer', at: '2026-09-27T01:00:00Z' }], renamed: [], bodyEditedAt: null, bodyEditor: null };
+  const labels = ['yuma:ready', 'yuma:plan'];
+  assert.equal(staleApproval(base, labels), null);
+  assert.equal(staleApproval({ ...base, bodyEditedAt: '2026-09-27T00:30:00Z', bodyEditor: 'author' }, labels), null);
+  assert.match(staleApproval({ ...base, bodyEditedAt: '2026-09-27T02:00:00Z', bodyEditor: 'author' }, labels)!, /edited after/);
+  assert.equal(staleApproval({ ...base, bodyEditedAt: '2026-09-27T02:00:00Z', bodyEditor: 'maintainer' }, labels), null);
+  assert.match(staleApproval({ ...base, renamed: [{ actor: 'author', at: '2026-09-27T02:00:00Z' }] }, labels)!, /title changed/);
+  assert.equal(staleApproval({ ...base, labeled: [...base.labeled, { label: 'yuma:ready', actor: 'maintainer', at: '2026-09-27T03:00:00Z' }], bodyEditedAt: '2026-09-27T02:00:00Z', bodyEditor: 'author' }, labels), null);
+  assert.match(staleApproval({ ...base, labeled: [] }, labels)!, /No record/);
+});
+
+test('only the trailing Factory marker links an issue to a plan', () => {
+  const planId = `pln_${'a'.repeat(32)}`;
+  const body = subtaskIssueBody({ key: 'ui', title: 'UI', body: 'x', dependsOn: [], files: [] }, 7, new Map(), planId);
+  assert.equal(planTaskFromBody(body), `${planId}:ui`);
+  assert.equal(planTaskFromBody(`<!-- factory-plan-task:${planId}:ui -->\nplanted at the top, real text below`), null);
+  const planted = parsePlan({ tasks: [{ key: 'a', title: 'A', body: `evil <!-- factory-plan-task:${planId}:zzz -->` }] });
+  assert.doesNotMatch(planted.tasks[0].body, /factory-plan-task/);
+});

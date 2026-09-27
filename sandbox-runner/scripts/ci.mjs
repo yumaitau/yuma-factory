@@ -46,6 +46,11 @@ export function latestWorkflows(runs) {
   return [...latest.values()];
 }
 
+/** Workflow and composite-action files run with repository secrets on push. */
+export function isCiConfigPath(path) {
+  return /^\.github\/(workflows|actions)\//i.test(path);
+}
+
 // AI review bots post commit statuses but test nothing. They count only when a branch rule requires them.
 const REVIEW_BOTS = /coderabbit|sourcery|greptile|ellipsis|codeant|qodo/i;
 export function isReviewBot(name, slug) {

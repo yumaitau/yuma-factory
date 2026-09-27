@@ -1,7 +1,5 @@
 'use client';
 
-import Link from 'next/link';
-
 import { Card } from '@/components/ui/card';
 import { buttonVariants } from '@/components/ui/button';
 
@@ -14,9 +12,10 @@ export function ConnectGithub({ installUrl }: { installUrl: string | null }) {
         and let agents open pull requests.
       </p>
       {installUrl ? (
-        <Link className={buttonVariants()} href={installUrl}>
+        // Plain navigation: the install route sets a state cookie and redirects to GitHub.
+        <a className={buttonVariants()} href={installUrl}>
           Install GitHub App
-        </Link>
+        </a>
       ) : (
         <p className="text-sm text-red-700">
           GitHub App is not configured. Set the GITHUB_APP_* secrets, then reload.

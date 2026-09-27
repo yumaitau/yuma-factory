@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { findExistingRun } from "./resume.mjs";
-import { evaluateCI, finishCommitCI, finishWithGreenCI, isLowRisk, isPassingConclusion, labelNames, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest } from "./ci.mjs";
+import { evaluateCI, finishCommitCI, isCiConfigPath, finishWithGreenCI, isLowRisk, isPassingConclusion, labelNames, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest } from "./ci.mjs";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { createHash } from "node:crypto";
@@ -52,9 +52,23 @@ async function readAgentJson(name) {
   }
 }
 
-function appServer() {
+// After the agent has run, CODEX_HOME is agent-controlled: never load it as root.
+/** Root reads of agent-writable files must not follow links planted by the agent. */
+async function readNoFollow(file) {
+  const handle = await fs.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > 64_000) throw new Error("Unexpected Codex login file.");
+    return JSON.parse(await handle.readFile("utf8"));
+  } finally {
+    await handle.close();
+  }
+}
+
+function appServer(asAgent = false) {
   const child = spawn("codex", ["app-server"], {
-    env,
+    env: asAgent ? { ...env, HOME: "/home/factory" } : env,
+    ...(asAgent ? { uid: 10001, gid: 10001 } : {}),
     stdio: ["pipe", "pipe", "pipe"],
   });
   child.stderr.resume();
@@ -122,7 +136,7 @@ async function status(server) {
     const data = await server.rpc("account/rateLimits/read");
     limits = data.rateLimitsByLimitId?.codex ?? data.rateLimits ?? null;
   } catch {}
-  const auth = JSON.parse(await fs.readFile(`${home}/auth.json`, "utf8"));
+  const auth = await readNoFollow(`${home}/auth.json`);
   if (
     auth.auth_mode !== "chatgpt" ||
     !auth.tokens?.account_id ||
@@ -473,6 +487,9 @@ async function run() {
           throw new Error(
             "Codex produced no file changes. See summary for details.",
           );
+        const changedPaths = (await command("git", ["-C", work, "diff", "--cached", "--name-only", "--no-renames", "-z", baseHead], agentOptions)).stdout.split("\0");
+        if (changedPaths.some(isCiConfigPath))
+          throw Object.assign(new Error("Codex changed GitHub Actions workflows or actions. Factory does not publish CI configuration, because it would run with repository secrets before review. Make that change by hand. Ticket left open."), { retryable: false });
         const publish = `${root}/publish`;
         const credentialEnv = {
           ...gitEnv,
@@ -651,10 +668,15 @@ async function run() {
       async function repairMain(mergeSha, current) {
         await progress("Main pipeline failed. Preparing a follow-up branch from the merge commit.");
         const credentialEnv = await gitCredentials();
-        await command("git", ["-c", "safe.directory=/workspace/repo", "-C", work, "fetch", "--depth", "1", "origin", mergeSha], { env: credentialEnv });
-        await command("git", ["-c", "safe.directory=/workspace/repo", "-C", work, "checkout", "--force", "--detach", "FETCH_HEAD"]);
+        // The old checkout's .git config and hooks are agent-written. Stop agent
+        // processes, discard it, and fetch the merge commit into a fresh root-owned repo.
+        await command("pkill", ["-KILL", "-u", "10001"]).catch(() => {});
+        await fs.rm(work, { recursive: true, force: true });
+        await command("git", ["init", "-q", work]);
+        await command("git", ["-C", work, "fetch", "--depth", "1", `https://github.com/${req.repoFullName}.git`, mergeSha], { env: credentialEnv });
+        await command("git", ["-C", work, "-c", "core.hooksPath=/dev/null", "checkout", "-q", "--force", "--detach", "FETCH_HEAD"]);
+        const head = (await command("git", ["-C", work, "rev-parse", "HEAD"])).stdout.trim();
         await command("chown", ["-R", "10001:10001", work]);
-        const head = (await command("git", ["-c", "safe.directory=/workspace/repo", "-C", work, "rev-parse", "HEAD"])).stdout.trim();
         baseHead = head;
         publishedHead = head;
         const previous = /-main-(\d+)$/.exec(publishBranch);
@@ -715,7 +737,7 @@ async function run() {
     appendLog(e.message);
     result = { status: "failed", pullRequestUrl: e.pullRequestUrl ?? pullRequestUrl, ...(e.retryable === false ? { retryable: false } : {}) };
   }
-  const server = appServer();
+  const server = appServer(!req.probe);
   try {
     await server.init();
     result.accountStatus = await status(server);

@@ -8,7 +8,7 @@ import { ensureRepoLabel } from '@/lib/github-completion';
 import { newId } from '@/lib/ids';
 import { parsePlan, planComment, planTaskFromBody, planTaskId, subtaskIssueBody, type Plan } from '@/lib/plan';
 import type { Db } from '@/lib/queries';
-import { factoryRisk } from '@/shared/ticket-risk';
+import { riskLabel, ticketRisk } from '@/shared/ticket-risk';
 
 type Ticket = typeof tickets.$inferSelect;
 
@@ -127,8 +127,9 @@ export async function applyPlan(db: Db, planId: string, userId: string | null) {
     const params = { owner, repo, request: { signal: AbortSignal.timeout(20_000) } };
     await ensureRepoLabel(client, params, LABELS.ready, '1F6FEB', 'Factory picks this ticket up automatically.');
     // Subtasks inherit the epic's Factory risk so low-risk epics still auto-merge.
-    const risk = factoryRisk(labelsOf(epic), LABEL_PREFIX);
-    const labels = [LABELS.ready, ...labelsOf(epic).filter((label) => risk && label.toLowerCase() === `${LABELS.riskPrefix}${risk}`)];
+    const risk = ticketRisk(labelsOf(epic), LABEL_PREFIX);
+    const labels = [LABELS.ready, ...(risk ? [riskLabel(risk, LABEL_PREFIX)] : [])];
+    if (risk) await ensureRepoLabel(client, params, riskLabel(risk, LABEL_PREFIX), risk === 'low' ? '2DA44E' : risk === 'medium' ? 'D4A72C' : 'CF222E', `Inherited from epic #${epic.githubIssueNumber}.`);
     const issueByKey = new Map<string, number>();
     const ticketByKey = new Map<string, string>();
     const saveSubtask = async (task: Plan['tasks'][number], issue: GithubIssue) => {
@@ -154,7 +155,8 @@ export async function applyPlan(db: Db, planId: string, userId: string | null) {
     // A crash between creating an issue and recording it leaves it only on GitHub; find it by its marker.
     if (plan.tasks.some((task) => !ticketByKey.has(task.key))) {
       for (const issue of await issuesSince(client, params, row.createdAt)) {
-        const marker = planTaskFromBody(issue.body);
+        // Only issues the Factory App created can be adopted as its subtasks.
+        const marker = issue.user?.type === 'Bot' ? planTaskFromBody(issue.body) : null;
         const task = plan.tasks.find((item) => marker === planTaskId(planId, item.key));
         if (task && !ticketByKey.has(task.key)) await saveSubtask(task, issue);
       }
@@ -182,7 +184,7 @@ export async function applyPlan(db: Db, planId: string, userId: string | null) {
   }
 }
 
-type GithubIssue = { id: number | bigint; number: number; title: string; body?: string | null; state: string; html_url: string; labels: unknown[]; pull_request?: unknown };
+type GithubIssue = { id: number | bigint; number: number; title: string; body?: string | null; state: string; html_url: string; labels: unknown[]; pull_request?: unknown; user?: { type?: string } | null };
 
 function labelNames(labels: unknown[]) {
   return labels.map((label) => typeof label === 'string' ? label : (label as { name?: string } | null)?.name).filter((name): name is string => !!name);
@@ -208,11 +210,13 @@ export async function resumeStalePlans(db: Db) {
   for (const plan of stale) await applyPlan(db, plan.id, null).catch(() => {});
 }
 
-/** Link an issue imported by sync or webhook back to its plan when it carries a task marker. */
-export async function planLinkForBody(db: Db, body: string | null | undefined) {
+/** Link an issue imported by sync or webhook back to its plan, only within the plan's own project. */
+export async function planLinkForBody(db: Db, body: string | null | undefined, projectId: string) {
   const planTask = planTaskFromBody(body);
   if (!planTask) return null;
-  const plan = await db.select({ ticketId: plans.ticketId }).from(plans).where(eq(plans.id, planTask.split(':')[0])).get();
+  const plan = await db.select({ ticketId: plans.ticketId }).from(plans)
+    .innerJoin(tickets, eq(plans.ticketId, tickets.id))
+    .where(and(eq(plans.id, planTask.split(':')[0]), eq(tickets.projectId, projectId))).get();
   return plan ? { planTask, parentTicketId: plan.ticketId } : null;
 }
 

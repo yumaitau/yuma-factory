@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import {
   agents,
@@ -70,12 +70,15 @@ export async function getInstallationByGithubId(installationId: number) {
 
 /* -------------------------------- Projects ------------------------------- */
 
-/** Retire projects whose repository is archived or no longer shared with the installation. */
-export async function archiveProjectsExcept(installationRowId: string, activeRepoIds: number[]) {
+/**
+ * Retire projects whose repository GitHub reports as archived. A repository missing
+ * from the installation's listing is left alone: narrowing App access is not intent to archive.
+ */
+export async function archiveProjects(installationRowId: string, archivedRepoIds: number[]) {
+  if (!archivedRepoIds.length) return [];
   const db = await getDb();
-  const keep = activeRepoIds.length ? sql`${projects.repoId} not in (${sql.join(activeRepoIds.map((id) => sql`${id}`), sql`, `)})` : sql`1 = 1`;
   const archived = await db.update(projects).set({ status: "archived", updatedAt: new Date() })
-    .where(and(eq(projects.installationId, installationRowId), eq(projects.status, "active"), keep))
+    .where(and(eq(projects.installationId, installationRowId), eq(projects.status, "active"), inArray(projects.repoId, archivedRepoIds)))
     .returning({ repo: projects.repoFullName });
   return archived.map((row) => row.repo);
 }

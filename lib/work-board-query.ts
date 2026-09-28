@@ -33,18 +33,22 @@ export async function workBoardCards(): Promise<WorkCard[]> {
   const blocker = alias(tickets, 'blocker');
   const blocks = await db.select({ ticketId: ticketDependencies.ticketId, number: blocker.githubIssueNumber }).from(ticketDependencies)
     .innerJoin(blocker, eq(ticketDependencies.dependsOnTicketId, blocker.id)).where(eq(blocker.githubState, 'open')).all();
-  return rows.map(({ ticket, repo, agent, run, account }) => ({
-    id: ticket.id, title: ticket.title, number: ticket.githubIssueNumber, repo, projectId: ticket.projectId,
-    htmlUrl: ticket.htmlUrl, stage: ticket.stage, githubState: ticket.githubState,
-    labels: parseLabels(ticket.labels), assignedAgentId: ticket.assignedAgentId,
-    agentName: agent?.name ?? null, automationSlot: agent?.automationSlot ?? null,
-    runStatus: run?.status ?? null, runId: run?.id ?? null,
-    waitingReason: run?.status === 'running' ? runWaitReason(run.id, account) : null,
-    completionPending: run?.status === 'running' && !!run.log?.startsWith('CI green;'),
-    startedAt: run?.startedAt?.toISOString() ?? null, finishedAt: run?.finishedAt?.toISOString() ?? null,
-    pullRequestUrl: run?.pullRequestUrl ?? null,
-    runMode: run?.mode ?? null,
-    runOutcome: run && run.status !== 'running' ? lastLine(run.log) : null,
-    blockedBy: blocks.filter((block) => block.ticketId === ticket.id).map((block) => block.number),
-  }));
+  return rows.map(({ ticket, repo, agent, run: latest, account }) => {
+    // Runs from before a human requeue no longer decide the ticket's lane.
+    const run = latest && !(ticket.requeuedAt && ticket.requeuedAt > latest.createdAt) ? latest : null;
+    return {
+      id: ticket.id, title: ticket.title, number: ticket.githubIssueNumber, repo, projectId: ticket.projectId,
+      htmlUrl: ticket.htmlUrl, stage: ticket.stage, githubState: ticket.githubState,
+      labels: parseLabels(ticket.labels), assignedAgentId: ticket.assignedAgentId,
+      agentName: agent?.name ?? null, automationSlot: agent?.automationSlot ?? null,
+      runStatus: run?.status ?? null, runId: run?.id ?? null,
+      waitingReason: run?.status === 'running' ? runWaitReason(run.id, account) : null,
+      completionPending: run?.status === 'running' && !!run.log?.startsWith('CI green;'),
+      startedAt: run?.startedAt?.toISOString() ?? null, finishedAt: run?.finishedAt?.toISOString() ?? null,
+      pullRequestUrl: run?.pullRequestUrl ?? null,
+      runMode: run?.mode ?? null,
+      runOutcome: run && run.status !== 'running' ? lastLine(run.log) : null,
+      blockedBy: blocks.filter((block) => block.ticketId === ticket.id).map((block) => block.number),
+    };
+  });
 }

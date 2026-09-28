@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
-import { cancelRunAction } from '@/app/actions/factory';
+import { cancelRunAction, moveTicketAction } from '@/app/actions/factory';
 import { useRouter } from 'next/navigation';
 import { workLane, workReason, type WorkCard } from '@/lib/work-board';
 import { formatSydneyDateTime } from '@/lib/datetime';
@@ -73,6 +73,19 @@ export function WorkBoard({ cards, refreshedAt }: { cards: WorkCard[]; refreshed
                 });
               }}>{pending ? 'Stopping…' : 'Stop and return to intake'}</button>
               <p className="text-muted-foreground">Stops retries. Keeps the existing branch and PR.</p>
+            </div>}
+            {(id === 'attention' || card.runStatus === 'cancelled') && <div className="mt-3 space-y-2 text-xs">
+              <button type="button" disabled={pending} className="rounded border px-2 py-1 font-medium disabled:opacity-50" onClick={() => {
+                setError('');
+                startTransition(async () => {
+                  try {
+                    const result = await moveTicketAction(card.id, 'intake');
+                    if (result.error) setError(result.error);
+                    else router.refresh();
+                  } catch { setError('Could not move this ticket. Try again.'); }
+                });
+              }}>{pending ? 'Moving…' : 'Move to Needs preparation'}</button>
+              <p className="text-muted-foreground">Clears the previous attempt. Factory picks it up again while it has {LABELS.ready}.</p>
             </div>}
             {riskCopy(card.labels) && <p className="mt-2 text-xs font-medium">{riskCopy(card.labels)}</p>}
             <div className="mt-3 flex flex-wrap gap-1">{card.labels.map((label) => <span key={label} className="min-w-0 max-w-full rounded bg-muted px-1.5 py-0.5 text-[11px]">{label}</span>)}</div>

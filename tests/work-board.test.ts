@@ -50,6 +50,6 @@ test('plan proposals and blocked subtasks explain what they wait for', () => {
 test('finished runs explain their own outcome', () => {
   assert.equal(workReason({ ...card, runStatus: 'failed', runId: 'run', stage: 'assigned', runOutcome: 'GitHub App Workflows write permission is required.' }),
     'Run failed: GitHub App Workflows write permission is required.');
-  assert.match(workReason({ ...card, runStatus: 'failed', runId: 'run', stage: 'assigned' }), /restart manually/);
+  assert.match(workReason({ ...card, runStatus: 'failed', runId: 'run', stage: 'assigned' }), /move it to Needs preparation/);
   assert.match(workReason({ ...card, runStatus: 'succeeded', runId: 'run', stage: 'review', runOutcome: 'No CI registered on the PR within 30 minutes.' }), /No CI on this repository/);
 });

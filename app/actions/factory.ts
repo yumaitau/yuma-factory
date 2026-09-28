@@ -121,7 +121,7 @@ export async function moveTicketAction(ticketId: string, stage: string) {
     const parsed = stageSchema.parse(stage) as TicketStage;
     if (parsed === "done")
       throw new Error("Tickets are completed automatically after the PR's CI is green.");
-    await setTicketStage(ticketId, parsed);
+    await setTicketStage(ticketId, parsed, parsed === "intake" || parsed === "assigned");
     revalidatePath('/', 'layout');
     return { ok: true };
   } catch (error) {

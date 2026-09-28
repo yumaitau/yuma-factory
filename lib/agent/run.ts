@@ -81,7 +81,7 @@ export async function startCodexRun(
           ...(options ? [
             inArray(tickets.stage, ['intake', 'assigned']),
             sql`(${tickets.assignedAgentId} is null or ${tickets.assignedAgentId} = ${agentId})`,
-            sql`not exists (select 1 from runs where ticket_id = ${ticketId})`,
+            sql`not exists (select 1 from runs where ticket_id = ${ticketId} and (${tickets.requeuedAt} is null or created_at >= ${tickets.requeuedAt}))`,
             sql`exists (select 1 from json_each(case when json_valid(${tickets.labels}) then ${tickets.labels} else '[]' end) where lower(value) in (lower(${options.automationLabel}), ${LABELS.plan}))`,
             sql`not exists (select 1 from ticket_dependencies d join tickets blocker on blocker.id = d.depends_on_ticket_id where d.ticket_id = ${ticketId} and blocker.github_state = 'open')`,
             sql`exists (select 1 from automation a join agents worker on worker.id = ${agentId} where a.id = 'github' and a.enabled = 1 and a.user_id = ${userId} and a.lease_id = ${options.automationLeaseId} and worker.owner_user_id = a.user_id and worker.automation_slot between 1 and a.target_agents)`,

@@ -265,11 +265,13 @@ export async function setTicketLabels(ticketId: string, labels: string[]) {
   await db.update(tickets).set({ labels: JSON.stringify(labels), updatedAt: new Date() }).where(eq(tickets.id, ticketId));
 }
 
-export async function setTicketStage(ticketId: string, stage: TicketStage) {
+/** `requeue` marks a human decision to retry: earlier runs stop blocking automatic pickup. */
+export async function setTicketStage(ticketId: string, stage: TicketStage, requeue = false) {
   const db = await getDb();
+  const now = new Date();
   const changed = await db
     .update(tickets)
-    .set({ stage, updatedAt: new Date() })
+    .set({ stage, updatedAt: now, ...(requeue ? { requeuedAt: now } : {}) })
     .where(and(eq(tickets.id, ticketId), sql`not exists (select 1 from runs where ticket_id = ${ticketId} and status = 'running')`))
     .returning({ id: tickets.id });
   if (!changed.length) throw new Error('Stop the active run on the Work board before moving this ticket.');

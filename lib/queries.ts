@@ -14,6 +14,7 @@ import {
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/ids";
 import { runWaitReason } from "@/lib/run-wait";
+import { runLeased } from "@/lib/codex/accounts";
 
 export type Db = Awaited<ReturnType<typeof getDb>>;
 
@@ -386,13 +387,13 @@ export async function listRunsForTicket(ticketId: string) {
 
 export async function getRun(runId: string) {
   const db = await getDb();
-  const row = await db.select({ run: runs, account: codexAccounts }).from(runs)
+  const row = await db.select({ run: runs, account: codexAccounts, leased: runLeased(sql`${runs.id}`) }).from(runs)
     .leftJoin(codexAccounts, eq(runs.codexAccountId, codexAccounts.id)).where(eq(runs.id, runId)).get();
   if (!row) return undefined;
   // runWaitReason handles a missing account (deleted/unassigned subscription),
   // so always call it for running runs instead of hiding the actionable reason.
   return { ...row.run, waitingReason: row.run.status === 'running'
-    ? runWaitReason(row.run.id, row.account) : null };
+    ? runWaitReason(row.run.id, row.account && { ...row.account, leased: !!row.leased }) : null };
 }
 
 export async function markRunRunning(runId: string, sandboxId: string) {

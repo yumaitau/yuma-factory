@@ -5,7 +5,7 @@ import { getDb } from '@/lib/db';
 import type { Db } from '@/lib/queries';
 import { newId } from '@/lib/ids';
 import { runWaitReason } from '@/lib/run-wait';
-import { availableAccounts } from '@/lib/codex/accounts';
+import { availableAccounts, runLeased } from '@/lib/codex/accounts';
 import { LABELS } from '@/lib/brand';
 
 export const AUTOMATION_ID = 'github';
@@ -69,10 +69,10 @@ export async function automationStatus() {
     or(eq(agents.id, row.agentId), sql`${agents.automationSlot} is not null`))).all();
   const poolIds = pool.map((agent) => agent.id);
   const queued = await automationCandidates(db, pool.filter((agent) => (agent.automationSlot ?? 1) <= row.targetAgents).map((agent) => agent.id), row.label, 1000);
-  const active = await db.select({ run: runs, account: codexAccounts }).from(runs)
+  const active = await db.select({ run: runs, account: codexAccounts, leased: runLeased(sql`${runs.id}`) }).from(runs)
     .leftJoin(codexAccounts, eq(runs.codexAccountId, codexAccounts.id))
     .where(and(poolIds.length ? inArray(runs.agentId, poolIds) : sql`0`, eq(runs.status, 'running')));
-  const waitingRuns = active.filter(({ run, account }) => run.codexAccountId && runWaitReason(run.id, account)).length;
+  const waitingRuns = active.filter(({ run, account, leased }) => run.codexAccountId && runWaitReason(run.id, account && { ...account, leased: !!leased })).length;
   const available = await availableAccounts(row.userId, db);
   const interrupted = !!row.leaseUntil && row.leaseUntil.getTime() <= Date.now();
   return {
@@ -83,6 +83,7 @@ export async function automationStatus() {
     targetAgents: row.targetAgents, totalAgents: pool.length,
     idleAgents: pool.filter((agent) => agent.status === 'idle' && (agent.automationSlot ?? 1) <= row.targetAgents).length,
     availableSubscriptions: available.length,
+    availableSlots: available.reduce((total, account) => total + account.freeSlots, 0),
     lastStartedAt: row.lastStartedAt?.toISOString() ?? null,
     lastFinishedAt: row.lastFinishedAt?.toISOString() ?? null,
     lastScheduledAt: row.lastScheduledAt?.toISOString() ?? null,

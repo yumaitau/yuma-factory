@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { codexAccounts, runs } from "@/db/schema";
+import { accountLeases, codexAccounts, runs } from "@/db/schema";
 import { reserveRunAccount } from "@/lib/codex/accounts";
 import { getDb } from "@/lib/db";
 import { getEnv } from "@/lib/env";
@@ -28,10 +28,11 @@ export async function POST(request: Request) {
     if (run.status !== 'running') return Response.json({ ok: true });
     // Runner has destroyed the stopped sandbox before releasing its account.
     const status = accountStatus && ["ready", "limited", "error", "disconnected"].includes(accountStatus.status) ? accountStatus.status : undefined;
-    await db.update(codexAccounts).set({ activeRunId: null, updatedAt: new Date(),
-      ...(status ? { status, error: accountStatus?.error ?? null,
-        limitsJson: accountStatus?.limits ? JSON.stringify(accountStatus.limits) : null } : {}),
-    }).where(and(eq(codexAccounts.id, accountId), eq(codexAccounts.activeRunId, id)));
+    const released = await db.delete(accountLeases)
+      .where(and(eq(accountLeases.accountId, accountId), eq(accountLeases.holderId, id))).returning({ id: accountLeases.holderId });
+    await db.update(codexAccounts).set({ activeRunId: null }).where(and(eq(codexAccounts.id, accountId), eq(codexAccounts.activeRunId, id)));
+    if (released.length && status) await db.update(codexAccounts).set({ updatedAt: new Date(), status, error: accountStatus?.error ?? null,
+      limitsJson: accountStatus?.limits ? JSON.stringify(accountStatus.limits) : null }).where(eq(codexAccounts.id, accountId));
     return Response.json({ ok: true });
   }
   if (run.status !== 'running')

@@ -259,11 +259,21 @@ export const codexAccounts = sqliteTable("codex_accounts", {
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   limitsJson: text("limits_json"),
   error: text("error"),
+  // Exclusive maintenance lock (reconnect, refresh, test). Runs hold accountLeases.
   activeRunId: text("active_run_id"),
+  // Tickets this subscription may work on at the same time.
+  maxRuns: integer("max_runs").notNull().default(3),
   lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });
+
+/** One row per run executing on a subscription; a paused run releases its lease. */
+export const accountLeases = sqliteTable("account_leases", {
+  holderId: text("holder_id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => codexAccounts.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+}, (table) => [index("account_leases_account_idx").on(table.accountId)]);
 
 /** Singleton scheduler settings and last-cycle health. No credentials stored here. */
 export const automation = sqliteTable("automation", {

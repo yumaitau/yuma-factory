@@ -39,6 +39,9 @@ export function hasGreenCICompletion(result: RunResult): boolean {
 }
 
 /** Only a succeeded run whose GitHub issue was verifiably closed may reach done. */
+/** Upper bound on tickets one subscription works at the same time. */
+export const MAX_PARALLEL_RUNS = 5;
+
 export function completionStage(status: RunResult["status"], issueClosed: boolean): "done" | "review" | "assigned" | "intake" {
   if (status === "cancelled") return "intake";
   return status === "succeeded" ? (issueClosed ? "done" : "review") : "assigned";

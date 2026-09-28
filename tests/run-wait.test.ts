@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { runWaitReason } from '../lib/run-wait';
 
 const now = Date.parse('2026-09-19T03:00:00Z');
-const ready = { activeRunId: null, enabled: true, status: 'ready', limitsJson: null };
+const ready = { activeRunId: null, leased: false, enabled: true, status: 'ready', limitsJson: null };
 const limited = { ...ready, status: 'limited', limitsJson: JSON.stringify({ primary: { usedPercent: 100, resetsAt: now / 1000 + 3600 } }) };
 
-test('only a subscription held by this run counts as executing', () => {
-  assert.equal(runWaitReason('run', { ...limited, activeRunId: 'run' }, now), null);
+test('only a run holding a lease counts as executing', () => {
+  assert.equal(runWaitReason('run', { ...limited, leased: true }, now), null);
   assert.match(runWaitReason('run', limited, now)!, /usage limit.*Resets.*retry automatically/);
   assert.match(runWaitReason('run', { ...ready, activeRunId: 'other' }, now)!, /other operation/);
   assert.match(runWaitReason('run', ready, now)!, /automatic recovery/);

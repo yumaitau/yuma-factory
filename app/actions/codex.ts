@@ -13,6 +13,8 @@ import {
   lockOwnedAccount,
   releaseAccount,
   setAccountEnabled,
+  setAccountMaxRuns,
+  accountBusy,
 } from "@/lib/codex/accounts";
 import { runnerRequest } from "@/lib/codex/runner";
 import {
@@ -81,7 +83,7 @@ export async function disconnectCodexAction(id: string) {
   return actionResult(async () => {
     const session = await requireSession();
     const account = await ownedAccount(id, session.user.id);
-    if (account.activeRunId)
+    if (account.activeRunId || await accountBusy(id))
       throw new Error(
         "Wait for the current run to finish before disconnecting.",
       );
@@ -125,6 +127,15 @@ export async function setCodexEnabledAction(id: string, enabled: boolean) {
   return actionResult(async () => {
     const session = await requireSession();
     await setAccountEnabled(id, session.user.id, enabled);
+    revalidatePath("/pool");
+    revalidatePath("/");
+  });
+}
+
+export async function setCodexMaxRunsAction(id: string, maxRuns: number) {
+  return actionResult(async () => {
+    const session = await requireSession();
+    await setAccountMaxRuns(id, session.user.id, maxRuns);
     revalidatePath("/pool");
     revalidatePath("/");
   });

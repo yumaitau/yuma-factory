@@ -8,6 +8,7 @@ import {
   disconnectCodexAction,
   shareCodexAction,
   setCodexEnabledAction,
+  setCodexMaxRunsAction,
   reconnectCodexAction,
   testCodexAction,
   testCodexStatusAction,
@@ -17,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { AccountStatus, RunResult } from "@/shared/codex";
+import { MAX_PARALLEL_RUNS, type AccountStatus, type RunResult } from "@/shared/codex";
 
 async function call<T>(promise: Promise<ActionResult<T>>): Promise<T> {
   const result = await promise;
@@ -35,6 +36,8 @@ type Entry = {
   shared: boolean;
   enabled: boolean;
   activeRunId: string | null;
+  maxRuns: number;
+  runningRuns: number;
   limitsJson: string | null;
   error: string | null;
 };
@@ -206,12 +209,15 @@ export function CodexPool({
             ? (JSON.parse(entry.limitsJson) as AccountStatus["limits"])
             : null;
           const own = entry.ownerUserId === userId;
+          // Maintenance needs the subscription to itself: no runs and no other operation.
+          const busy = !!entry.activeRunId || entry.runningRuns > 0;
           return (
             <Card key={entry.id} className="p-5">
               <div className="flex justify-between gap-3">
                 <h2 className="font-semibold">{entry.label}</h2>
                 <span className="text-sm">
-                  {!entry.enabled ? (entry.activeRunId ? "Disabled · finishing current run" : "Disabled") : entry.activeRunId ? "Running" : entry.status}
+                  {!entry.enabled ? (entry.runningRuns ? "Disabled · finishing current runs" : "Disabled")
+                    : entry.runningRuns ? `Running ${entry.runningRuns}/${entry.maxRuns}` : entry.activeRunId ? "Busy" : entry.status}
                 </span>
               </div>
               <p className="mt-1 text-sm text-muted-foreground">
@@ -251,6 +257,13 @@ export function CodexPool({
                   : "Only available to account owner"}
               </p>
               {entry.shared && <p className="mt-1 text-xs text-muted-foreground">Team members can enable or disable this subscription for everyone.</p>}
+              <label className="mt-3 flex items-center gap-2 text-xs">Parallel runs
+                <select aria-label="Parallel runs" className="rounded-md border bg-background px-2 py-1" value={entry.maxRuns}
+                  disabled={pending || !own} onChange={(event) => act(() => call(setCodexMaxRunsAction(entry.id, Number(event.target.value))))}>
+                  {Array.from({ length: MAX_PARALLEL_RUNS }, (_, i) => i + 1).map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+                <span className="text-muted-foreground">tickets at once. More runs use usage limits faster.</span>
+              </label>
               {(own || entry.shared) && (
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button size="sm" variant="outline" disabled={pending}
@@ -261,7 +274,7 @@ export function CodexPool({
                   <Button
                     size="sm"
                     disabled={
-                      pending || !entry.enabled || !!entry.activeRunId || entry.status !== "ready"
+                      pending || !entry.enabled || busy || entry.status !== "ready"
                     }
                     onClick={() =>
                       act(async () => {
@@ -278,7 +291,7 @@ export function CodexPool({
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={pending || !!entry.activeRunId}
+                    disabled={pending || busy}
                     onClick={() =>
                       act(async () =>
                         setLogin(await call(reconnectCodexAction(entry.id))),
@@ -289,7 +302,7 @@ export function CodexPool({
                   </Button>
                   <Button
                     size="sm"
-                    disabled={pending || !!entry.activeRunId}
+                    disabled={pending || busy}
                     onClick={() =>
                       act(async () => {
                         const s = await call(refreshCodexAction(entry.id));
@@ -312,7 +325,7 @@ export function CodexPool({
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={pending || !!entry.activeRunId}
+                    disabled={pending || busy}
                     onClick={() =>
                       act(() => call(disconnectCodexAction(entry.id)))
                     }

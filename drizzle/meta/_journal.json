@@ -71,6 +71,13 @@
       "when": 1790510000000,
       "tag": "0009_restore_refresh_archived_projects",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1790520000000,
+      "tag": "0010_ticket_requeue",
+      "breakpoints": true
     }
   ]
 }

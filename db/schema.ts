@@ -192,6 +192,8 @@ export const tickets = sqliteTable(
     parentTicketId: text("parent_ticket_id"),
     // `<planId>:<taskKey>` for subtasks created from a plan; survives issue renames.
     planTask: text("plan_task"),
+    // Set when a human moves the ticket back; earlier runs stop blocking pickup.
+    requeuedAt: integer("requeued_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },

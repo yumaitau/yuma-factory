@@ -37,14 +37,14 @@ export function workReason(card: WorkCard) {
     : (card.pullRequestUrl
       ? (isLowRisk(card.labels) ? 'PR ready. Monitoring CI. Low risk merges when green, then watches the default branch pipeline.' : 'PR ready. Monitoring CI and fixing failures before closing the ticket.')
       : 'Codex is working in an isolated worker.');
-  if (lane === 'attention') return card.runOutcome ? `Run failed: ${card.runOutcome}` : 'Previous run failed. Review and restart manually.';
+  if (lane === 'attention') return card.runOutcome ? `Run failed: ${card.runOutcome}` : 'Previous run failed. Review the output, then move it to Needs preparation to retry.';
   if (lane === 'review' && card.runOutcome?.startsWith('No CI registered')) return 'No CI on this repository, so Factory did not merge. Review and merge the PR yourself.';
   if (lane === 'review' && card.runMode === 'plan') return 'Plan proposed. Approve it on the Plans page to create subtasks.';
   if (lane === 'review') return isLowRisk(card.labels)
     ? 'Implementation finished. Low-risk merge did not complete; review the pull request.'
     : 'Implementation finished. Review the result and pull request.';
   if (lane === 'done') return card.githubState === 'closed' ? 'GitHub issue closed.' : 'Marked done.';
-  if (card.runStatus === 'cancelled') return 'Run stopped. Automatic recovery disabled. Move or restart the ticket from its project board.';
+  if (card.runStatus === 'cancelled') return 'Run stopped. Automatic recovery disabled. Move it to Needs preparation to retry.';
   if (!card.labels.some((label) => label.toLowerCase() === LABELS.ready)) return `Add ${LABELS.ready} on GitHub to request automatic pickup.`;
   if (card.assignedAgentId && !card.automationSlot) return 'Assigned to another agent. Start manually or unassign for automatic pickup.';
   if (card.blockedBy?.length) return `Waiting for ${card.blockedBy.map((number) => `#${number}`).join(', ')} to close.`;

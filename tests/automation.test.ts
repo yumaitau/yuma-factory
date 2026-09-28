@@ -70,7 +70,7 @@ test('automation provisions ten unique agents, preserves the working agent and s
   } finally { sqlite.close(); }
 });
 
-test('automatic pickup requires exact label, open active board, free assignment and no previous attempt', async () => {
+test('automatic pickup requires exact label, open active board, free assignment and no attempt since requeue', async () => {
   const { db, sqlite } = database();
   try {
     const now = new Date();
@@ -91,16 +91,20 @@ test('automatic pickup requires exact label, open active board, free assignment 
       { id: 'archived', labels: '["factory:ready"]', projectId: 'archived' },
       { id: 'failed', labels: '["factory:ready"]' },
       { id: 'succeeded', labels: '["factory:ready"]' },
+      { id: 'requeued', labels: '["factory:ready"]', stage: 'intake', requeuedAt: new Date(now.getTime() + 60_000) },
+      { id: 'retried', labels: '["factory:ready"]', stage: 'assigned', requeuedAt: new Date(now.getTime() - 60_000) },
     ];
     for (const [index, item] of cases.entries()) {
       await db.insert(schema.tickets).values({ projectId: 'active', githubIssueId: index + 1,
         githubIssueNumber: index + 1, title: item.id, htmlUrl: 'https://github.com/org/repo/issues/1',
         createdAt: now, updatedAt: now, ...item });
     }
-    for (const status of ['failed', 'succeeded']) await db.insert(schema.runs).values({
-      id: `run-${status}`, ticketId: status, agentId: 'worker', modelId: 'codex-default', status, createdAt: now,
+    // A human requeue clears an earlier failure; an attempt made after the requeue still blocks.
+    for (const ticketId of ['failed', 'succeeded', 'requeued', 'retried']) await db.insert(schema.runs).values({
+      id: `run-${ticketId}`, ticketId, agentId: 'worker', modelId: 'codex-default',
+      status: ticketId === 'succeeded' ? 'succeeded' : 'failed', createdAt: now,
     });
     const result = await automationCandidates(db, 'worker', 'factory:ready');
-    assert.deepEqual(result.map((row) => row.ticket.id).sort(), ['case', 'eligible']);
+    assert.deepEqual(result.map((row) => row.ticket.id).sort(), ['case', 'eligible', 'requeued']);
   } finally { sqlite.close(); }
 });

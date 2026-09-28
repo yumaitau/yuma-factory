@@ -56,7 +56,8 @@ export async function automationCandidates(db: Db, agentId: string | string[], l
       // Subtasks wait until every ticket they build on is closed.
       sql`not exists (select 1 from ticket_dependencies d join tickets blocker on blocker.id = d.depends_on_ticket_id where d.ticket_id = ${tickets.id} and blocker.github_state = 'open')`,
       // A failed attempt needs human review; a successful attempt must not make a second PR.
-      sql`not exists (select 1 from ${runs} where ${runs.ticketId} = ${tickets.id})`,
+      // A human requeue clears earlier attempts.
+      sql`not exists (select 1 from ${runs} where ${runs.ticketId} = ${tickets.id} and (${tickets.requeuedAt} is null or ${runs.createdAt} >= ${tickets.requeuedAt}))`,
     )).orderBy(asc(tickets.createdAt), asc(tickets.id)).limit(limit).all();
 }
 

@@ -1,6 +1,6 @@
 import "server-only";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { agents, codexAccounts, runs, tickets } from "@/db/schema";
+import { accountLeases, agents, codexAccounts, runs, tickets } from "@/db/schema";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/ids";
 import { getGithubApp, getInstallationToken } from "@/lib/github";
@@ -238,7 +238,7 @@ export async function completeCodexRun(runId: string, result: RunResult) {
   }
   const accountState = result.accountStatus;
   // D1 batches are transactional: completion cannot leave the ticket or account locked.
-  const [, , , finished] = await db.batch([
+  const [, , , , , finished] = await db.batch([
     db
       .update(tickets)
       .set({
@@ -255,7 +255,6 @@ export async function completeCodexRun(runId: string, result: RunResult) {
     db
       .update(codexAccounts)
       .set({
-        activeRunId: null,
         ...(accountState ? {
           status: accountState.status,
           email: accountState.email,
@@ -265,7 +264,11 @@ export async function completeCodexRun(runId: string, result: RunResult) {
         } : {}),
         updatedAt: new Date(),
       })
-      .where(and(eq(codexAccounts.activeRunId, runId), active)),
+      .where(and(eq(codexAccounts.id, run.codexAccountId ?? ""), active)),
+    // A paused run holds no lease; deleting a missing one is a no-op.
+    db.delete(accountLeases).where(eq(accountLeases.holderId, runId)),
+    // Runs claimed before parallel leases existed held the maintenance lock instead.
+    db.update(codexAccounts).set({ activeRunId: null }).where(eq(codexAccounts.activeRunId, runId)),
     db
       .update(runs)
       .set({

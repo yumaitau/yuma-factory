@@ -73,7 +73,7 @@ export function AutomationPanel({ status, userId }: { status: AutomationStatus; 
           <div><dt className="text-muted-foreground">Next fallback check (Sydney)</dt><dd className="mt-1">{status.enabled ? time(nextCheck) : 'Paused'}</dd></div>
           <div><dt className="text-muted-foreground">Board refresh</dt><dd className="mt-1">{status.reposSynced}/{status.boardsTotal} boards · {status.issuesSynced} issues</dd></div>
           <div><dt className="text-muted-foreground">Work</dt><dd className="mt-1">{status.queued} queued · {status.activeRuns} running · {status.waitingRuns} waiting</dd></div>
-          <div><dt className="text-muted-foreground">Capacity</dt><dd className="mt-1">{status.idleAgents}/{status.targetAgents} agents idle · {status.availableSubscriptions} subscriptions free</dd></div>
+          <div><dt className="text-muted-foreground">Capacity</dt><dd className="mt-1">{status.idleAgents}/{status.targetAgents} agents idle · {status.availableSlots} run slots free on {status.availableSubscriptions} subscriptions</dd></div>
         </dl>
         {status.running && now && status.lastStartedAt && <p role="status" className="mt-3 text-xs">
           Checking for {Math.max(0, Math.floor((now - Date.parse(status.lastStartedAt)) / 1000))}s · last progress {time(status.heartbeatAt)}

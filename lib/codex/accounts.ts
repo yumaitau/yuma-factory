@@ -1,16 +1,25 @@
 import "server-only";
-import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { codexAccounts, runs } from "@/db/schema";
+import { and, asc, eq, getTableColumns, isNull, or, sql, type SQL } from "drizzle-orm";
+import { accountLeases, codexAccounts } from "@/db/schema";
 import { newId } from "@/lib/ids";
 import { getDb } from "@/lib/db";
 import { parseLimits } from "@/lib/run-wait";
 import { runnerRequest } from "./runner";
-import { hasCapacity, type AccountStatus } from "@/shared/codex";
+import { hasCapacity, MAX_PARALLEL_RUNS, type AccountStatus } from "@/shared/codex";
 
-// A paused sandbox releases its lock, but its durable job still needs this
-// subscription. New work must not repeatedly take it before recovery resumes.
-const noRecoveringRun = () => sql`not exists (select 1 from ${runs}
-  where ${runs.codexAccountId} = ${codexAccounts.id} and ${runs.status} = 'running')`;
+// A claim reserves its lease before the run row exists; an abandoned claim expires.
+const pendingClaim = (lease: string) => sql.raw(`not exists (select 1 from runs r where r.id = ${lease}.holder_id) and ${lease}.created_at > unixepoch() - 600`);
+// A paused run releases its lease, but its durable job still needs a slot on
+// this subscription. New work must not take that slot before recovery resumes.
+const occupied = (account: SQL) => sql`((select count(*) from runs where runs.codex_account_id = ${account} and runs.status = 'running')
+  + (select count(*) from account_leases l where l.account_id = ${account} and ${pendingClaim("l")}))`;
+/** Leases held by executing runs or fresh claims; maintenance must wait for none. */
+const liveLeases = (account: SQL) => sql`select 1 from account_leases l where l.account_id = ${account}
+  and (exists (select 1 from runs r where r.id = l.holder_id and r.status = 'running') or ${pendingClaim("l")})`;
+const noLiveLease = (account: SQL) => sql`not exists (${liveLeases(account)})`;
+const accountId = sql`${codexAccounts.id}`;
+/** Select alongside a run: whether it holds a lease, i.e. is executing rather than paused. */
+export const runLeased = (runId: SQL) => sql<number>`exists (select 1 from account_leases where holder_id = ${runId})`;
 
 export async function ownedAccount(id: string, userId: string) {
   const db = await getDb();
@@ -58,7 +67,7 @@ export async function saveStatus(id: string, status: AccountStatus) {
 }
 export async function refreshAccount(id: string, userId: string) {
   const row = await ownedAccount(id, userId);
-  if (row.activeRunId) return { status: "busy" };
+  if (row.activeRunId || await accountBusy(id)) return { status: "busy" };
   const lock = await lockOwnedAccount(id, userId);
   try {
     const status = await runnerRequest<AccountStatus>(`/accounts/${id}`);
@@ -71,7 +80,8 @@ export async function refreshAccount(id: string, userId: string) {
 export async function visibleAccounts(userId: string) {
   const db = await getDb();
   return db
-    .select()
+    .select({ ...getTableColumns(codexAccounts), runningRuns: sql<number>`(select count(*) from account_leases l
+      where l.account_id = ${codexAccounts.id} and exists (select 1 from runs r where r.id = l.holder_id and r.status = 'running'))` })
     .from(codexAccounts)
     .where(
       or(eq(codexAccounts.ownerUserId, userId), eq(codexAccounts.shared, true)),
@@ -79,13 +89,14 @@ export async function visibleAccounts(userId: string) {
     .orderBy(asc(codexAccounts.createdAt))
     .all();
 }
+/** Subscriptions with a free parallel slot. */
 export async function availableAccounts(
   userId: string,
   database?: Awaited<ReturnType<typeof getDb>>,
 ) {
   const db = database ?? (await getDb());
   const rows = await db
-    .select()
+    .select({ ...getTableColumns(codexAccounts), used: sql<number>`${occupied(accountId)}` })
     .from(codexAccounts)
     .where(
       and(
@@ -99,41 +110,38 @@ export async function availableAccounts(
           eq(codexAccounts.status, "limited"),
         ),
         isNull(codexAccounts.activeRunId),
-        noRecoveringRun(),
+        sql`${occupied(accountId)} < ${codexAccounts.maxRuns}`,
       ),
     )
-    .orderBy(asc(codexAccounts.lastUsedAt))
+    // Least loaded first, then least recently used, so tickets spread across subscriptions.
+    .orderBy(sql`${occupied(accountId)}`, asc(codexAccounts.lastUsedAt))
     .all();
-  return rows.filter((row) => hasCapacity(parseLimits(row.limitsJson)));
+  return rows
+    .filter((row) => hasCapacity(parseLimits(row.limitsJson)))
+    .map(({ used, ...row }) => ({ ...row, freeSlots: row.maxRuns - used }));
+}
+
+/** Free parallel slots across every usable subscription. */
+export async function availableSlots(userId: string, database?: Awaited<ReturnType<typeof getDb>>) {
+  return (await availableAccounts(userId, database)).reduce((total, row) => total + row.freeSlots, 0);
 }
 
 export async function claimAccount(userId: string, runId: string, database?: Awaited<ReturnType<typeof getDb>>) {
   const db = database ?? (await getDb());
   for (const row of await availableAccounts(userId, db)) {
-    const claimed = await db
-      .update(codexAccounts)
-      .set({ activeRunId: runId, lastUsedAt: new Date() })
-      .where(
-        and(
-          eq(codexAccounts.id, row.id),
-          eq(codexAccounts.enabled, true),
-          isNull(codexAccounts.activeRunId),
-          noRecoveringRun(),
-          or(
-            eq(codexAccounts.status, "ready"),
-            eq(codexAccounts.status, "limited"),
-          ),
-          or(
-            eq(codexAccounts.ownerUserId, userId),
-            eq(codexAccounts.shared, true),
-          ),
-        ),
-      )
-      .returning({ id: codexAccounts.id });
-    if (claimed.length) return row;
+    // One INSERT...SELECT re-checks every condition, so racing claims cannot overfill a subscription.
+    const claimed = await db.all(sql`insert into account_leases (holder_id, account_id, created_at)
+      select ${runId}, id, unixepoch() from codex_accounts
+      where id = ${row.id} and enabled = 1 and active_run_id is null and status in ('ready', 'limited')
+        and (owner_user_id = ${userId} or shared = 1) and ${occupied(sql`codex_accounts.id`)} < max_runs
+      returning holder_id`);
+    if (claimed.length) {
+      await db.update(codexAccounts).set({ lastUsedAt: new Date() }).where(eq(codexAccounts.id, row.id));
+      return row;
+    }
   }
   throw new Error(
-    "No available Codex subscription. Connect, enable or refresh an account in Codex subscriptions, or wait for its current run to finish.",
+    "No available Codex subscription. Connect, enable or refresh an account in Codex subscriptions, or wait for a parallel run slot to free up.",
   );
 }
 
@@ -146,12 +154,21 @@ export async function setAccountEnabled(id: string, userId: string, enabled: boo
     .returning({ id: codexAccounts.id });
   if (!changed.length) throw new Error("Subscription not found.");
 }
-export async function releaseAccount(id: string, runId: string) {
-  const db = await getDb();
+/** Release a run's lease or a maintenance lock held by `holderId`. */
+export async function releaseAccount(id: string, holderId: string, database?: Awaited<ReturnType<typeof getDb>>) {
+  const db = database ?? (await getDb());
+  await db.delete(accountLeases).where(and(eq(accountLeases.accountId, id), eq(accountLeases.holderId, holderId)));
   await db
     .update(codexAccounts)
     .set({ activeRunId: null, updatedAt: new Date() })
-    .where(and(eq(codexAccounts.id, id), eq(codexAccounts.activeRunId, runId)));
+    .where(and(eq(codexAccounts.id, id), eq(codexAccounts.activeRunId, holderId)));
+}
+
+/** True while any run is executing on the subscription. */
+export async function accountBusy(id: string, database?: Awaited<ReturnType<typeof getDb>>) {
+  const db = database ?? (await getDb());
+  return !(await db.select({ id: codexAccounts.id }).from(codexAccounts)
+    .where(and(eq(codexAccounts.id, id), noLiveLease(accountId))).get());
 }
 
 export async function lockOwnedAccount(
@@ -171,26 +188,41 @@ export async function lockOwnedAccount(
         eq(codexAccounts.ownerUserId, userId),
         ...(requireEnabled ? [eq(codexAccounts.enabled, true)] : []),
         isNull(codexAccounts.activeRunId),
+        noLiveLease(accountId),
       ),
     )
     .returning({ id: codexAccounts.id });
   if (!claimed.length)
     throw new Error(
-      "This subscription is busy or disabled. Enable it and wait for its current operation to finish.",
+      "This subscription is busy or disabled. Enable it and wait for its current runs and operations to finish.",
     );
   return lockId;
 }
 
-/** Reclaim only the original subscription; never steal a reconnect/other-run lock. */
+/** Renew or resume a run's lease on its original subscription; never while maintenance holds it. */
 export async function reserveRunAccount(id: string, userId: string, runId: string, resume: boolean, database?: Awaited<ReturnType<typeof getDb>>) {
   const db = database ?? await getDb();
-  const claimed = await db.update(codexAccounts).set({ activeRunId: runId, updatedAt: new Date() })
-    .where(and(eq(codexAccounts.id, id),
-      or(eq(codexAccounts.activeRunId, runId), ...(resume ? [and(
-        isNull(codexAccounts.activeRunId), eq(codexAccounts.enabled, true),
-        inArray(codexAccounts.status, ["ready", "limited"]),
-        or(eq(codexAccounts.ownerUserId, userId), eq(codexAccounts.shared, true)),
-      )] : [])),
-    )).returning({ id: codexAccounts.id });
+  const held = await db.select({ id: accountLeases.holderId }).from(accountLeases)
+    .where(and(eq(accountLeases.accountId, id), eq(accountLeases.holderId, runId))).get();
+  if (held) return true;
+  if (!resume) return false;
+  // Paused runs already count toward the subscription's slots; executing leases stay within max_runs.
+  const claimed = await db.all(sql`insert into account_leases (holder_id, account_id, created_at)
+    select ${runId}, id, unixepoch() from codex_accounts
+    where id = ${id} and enabled = 1 and active_run_id is null and status in ('ready', 'limited')
+      and (owner_user_id = ${userId} or shared = 1)
+      and (select count(*) from (${liveLeases(sql`codex_accounts.id`)})) < max_runs
+    on conflict do nothing
+    returning holder_id`);
   return claimed.length > 0;
+}
+
+export async function setAccountMaxRuns(id: string, userId: string, maxRuns: number, database?: Awaited<ReturnType<typeof getDb>>) {
+  if (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > MAX_PARALLEL_RUNS)
+    throw new Error(`Choose between 1 and ${MAX_PARALLEL_RUNS} parallel runs.`);
+  const db = database ?? (await getDb());
+  const changed = await db.update(codexAccounts).set({ maxRuns, updatedAt: new Date() })
+    .where(and(eq(codexAccounts.id, id), eq(codexAccounts.ownerUserId, userId)))
+    .returning({ id: codexAccounts.id });
+  if (!changed.length) throw new Error("Subscription not found.");
 }

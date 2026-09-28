@@ -110,17 +110,23 @@ async function read<T>(
 /**
  * After a run, auth.json is agent-writable. Only refreshed tokens for the same
  * ChatGPT account may replace the vault copy; a swapped-in login is discarded.
+ * Parallel runs share one login, so an older copy never overwrites a newer refresh.
  */
 async function persist(env: Env, id: string, sb: ReturnType<typeof sandbox>, sameAccount = false) {
   const file = await sb.readFile(`${home}/auth.json`);
   if (sameAccount) {
     const stored = await load(env, id);
-    const accountOf = (raw: string | null) => {
-      try { return raw ? (JSON.parse(raw) as { tokens?: { account_id?: unknown } }).tokens?.account_id : undefined; } catch { return undefined; }
+    const parse = (raw: string | null) => {
+      try { return raw ? JSON.parse(raw) as { tokens?: { account_id?: unknown }; last_refresh?: unknown } : undefined; } catch { return undefined; }
     };
-    const previous = accountOf(stored);
-    if (typeof previous !== "string" || accountOf(file.content) !== previous)
+    const previous = parse(stored);
+    const current = parse(file.content);
+    if (typeof previous?.tokens?.account_id !== "string" || current?.tokens?.account_id !== previous.tokens.account_id)
       throw new Error("Codex login changed account during the run. Vault copy kept.");
+    if (file.content === stored) return;
+    const refreshed = (value: unknown) => typeof value === "string" ? Date.parse(value) || 0 : 0;
+    const vaultRefresh = refreshed(previous.last_refresh);
+    if (vaultRefresh && refreshed(current.last_refresh) <= vaultRefresh) return;
   }
   await storeAuth(env, id, file.content);
 }

@@ -7,7 +7,7 @@ import { getGithubApp } from '@/lib/github';
 import { newId } from '@/lib/ids';
 import { startCodexRun, refreshRuns } from '@/lib/agent/run';
 import { AUTOMATION_ID, automationCandidates, claimAutomation, ensureAutomationAgents } from '@/lib/automation-state';
-import { availableAccounts } from '@/lib/codex/accounts';
+import { availableSlots } from '@/lib/codex/accounts';
 import { forEachConcurrent, planAssignments } from '@/lib/concurrency';
 import { planLinkForBody, reconcileEpics, resumeStalePlans } from '@/lib/collab-store';
 import { LABELS } from '@/lib/brand';
@@ -126,7 +126,7 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
       const idle = await db.select().from(agents).where(and(eq(agents.ownerUserId, settings.userId),
         eq(agents.status, 'idle'), sql`${agents.automationSlot} between 1 and ${settings.targetAgents}`)).all();
       const candidates = await automationCandidates(db, pool.map((agent) => agent.id), settings.label);
-      const capacity = (await availableAccounts(settings.userId, db)).length;
+      const capacity = await availableSlots(settings.userId, db);
       const assignments = planAssignments(candidates.map((row) => row.ticket), idle, capacity);
       const dispatchErrors: string[] = [];
       await db.update(automation).set({ reposSynced, issuesSynced, updatedAt: new Date(),

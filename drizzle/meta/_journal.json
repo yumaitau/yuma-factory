@@ -78,6 +78,13 @@
       "when": 1790520000000,
       "tag": "0010_ticket_requeue",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1790530000000,
+      "tag": "0011_account_parallel_runs",
+      "breakpoints": true
     }
   ]
 }

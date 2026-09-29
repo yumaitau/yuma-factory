@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { findExistingRun } from "./resume.mjs";
-import { evaluateCI, finishCommitCI, isCiConfigPath, finishWithGreenCI, isLowRisk, isPassingConclusion, labelNames, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest } from "./ci.mjs";
+import { evaluateCI, finishCommitCI, isAccountBlockedCI, isCiConfigPath, finishWithGreenCI, isLowRisk, isPassingConclusion, labelNames, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest } from "./ci.mjs";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { createHash } from "node:crypto";
@@ -483,10 +483,14 @@ async function run() {
           ["-C", work, "diff", "--cached", "--binary", "--no-ext-diff", baseHead],
           { ...agentOptions, maxOutput: 8_000_000 },
         );
+        // A recovered branch is its own base, so an idle repair has an empty patch.
+        if (!patch.stdout.trim() && repair) return false;
         if (!patch.stdout.trim())
-          throw new Error(
-            "Codex produced no file changes. See summary for details.",
-          );
+          // Rerunning the same prompt rarely changes the outcome, often because the
+          // work already landed elsewhere. Leave the ticket for a human to close or requeue.
+          throw Object.assign(new Error(
+            "Codex produced no file changes. See summary for details. Close the issue if the work is already done, or move it to Needs preparation to retry.",
+          ), { retryable: false });
         const changedPaths = (await command("git", ["-C", work, "diff", "--cached", "--name-only", "--no-renames", "-z", baseHead], agentOptions)).stdout.split("\0");
         if (changedPaths.some(isCiConfigPath))
           throw Object.assign(new Error("Codex changed GitHub Actions workflows or actions. Factory does not publish CI configuration, because it would run with repository secrets before review. Make that change by hand. Ticket left open."), { retryable: false });
@@ -579,7 +583,10 @@ async function run() {
           }).catch(() => ({ stdout: "Failed-job logs unavailable; use the check output and reproduce locally." }));
           diagnostics.push(output.stdout);
         }
-        return redact(diagnostics.join("\n")).slice(-45000);
+        const text = redact(diagnostics.join("\n"));
+        if (isAccountBlockedCI(text))
+          throw Object.assign(new Error("GitHub did not start CI jobs: the account's Actions billing or spending limit is blocking them. Fix billing in GitHub settings, then move the ticket to Needs preparation to retry. PR and ticket left open."), { retryable: false });
+        return text.slice(-45000);
       };
       const snapshotCommit = async (sha) => {
         // Branch protection lists pull-request checks that never register on a push.
@@ -632,6 +639,7 @@ async function run() {
             await progress(changed
               ? "Repair pushed to the same PR. Waiting for fresh CI."
               : "Repair produced no changes. Rechecking CI before another repair attempt.");
+            return changed;
           },
           closeIssue: async (sha) => {
             const confirmed = await snapshot();

@@ -134,14 +134,25 @@ export async function mergeGreenPullRequest({ github, pullNumber, sha }) {
 
 export const NO_PR_CI_MS = 30 * 60_000;
 export const NO_MAIN_CI_MS = 10 * 60_000;
+// Repairs in a row that change nothing before the PR is left for a human.
+export const MAX_IDLE_REPAIRS = 3;
+
+// GitHub refuses to start jobs when the account's Actions billing is blocked.
+// No code change can fix that, so repairing only burns the subscription.
+const ACCOUNT_BLOCKED_CI = /job was not started because recent account payments have failed|spending limit needs to be increased/i;
+export function isAccountBlockedCI(diagnostics) {
+  return ACCOUNT_BLOCKED_CI.test(diagnostics ?? "");
+}
 
 /**
- * No retry limit: every repair must pass CI on its new head before closure.
+ * Repairs that push changes are unlimited; every repair must pass CI on its new head
+ * before closure. MAX_IDLE_REPAIRS in a row that change nothing stop the run.
  * Returns null when no CI ever registers on the PR: it is left for human review.
  */
 export async function finishWithGreenCI({ snapshot, repair, closeIssue, progress, wait, now = Date.now }) {
   let greenHead = null;
   let emptySince = null;
+  let idleRepairs = 0;
   for (;;) {
     const current = await snapshot();
     if (current.empty) {
@@ -155,7 +166,11 @@ export async function finishWithGreenCI({ snapshot, repair, closeIssue, progress
     if (current.state === "failed") {
       greenHead = null;
       await progress("CI failed. Fixing failures on the existing PR.");
-      await repair(current);
+      // repair() returns false when Codex changed nothing; anything else counts as progress.
+      if (await repair(current) === false) {
+        if (++idleRepairs >= MAX_IDLE_REPAIRS)
+          throw Object.assign(new Error(`CI still failing after ${MAX_IDLE_REPAIRS} repairs that changed nothing. PR left open for review; ticket left open.`), { retryable: false });
+      } else idleRepairs = 0;
     } else if (current.state === "green" && !current.blocked) {
       // Two independent observations avoid closing during check registration/reruns.
       if (greenHead === current.sha) {

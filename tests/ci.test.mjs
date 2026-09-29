@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateCI, finishCommitCI, isCiConfigPath, isReviewBot, finishWithGreenCI, isLowRisk, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest, requiredChecks } from "../sandbox-runner/scripts/ci.mjs";
+import { evaluateCI, finishCommitCI, isAccountBlockedCI, isCiConfigPath, MAX_IDLE_REPAIRS, isReviewBot, finishWithGreenCI, isLowRisk, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest, requiredChecks } from "../sandbox-runner/scripts/ci.mjs";
 
 test("CI requires reported checks and waits for pending work", () => {
   assert.equal(evaluateCI([], [], []).state, "pending");
@@ -310,4 +310,24 @@ test("a default branch without any pipeline completes after 10 minutes", async (
 test("CI workflow and action files are never published by the agent", () => {
   for (const path of [".github/workflows/ci.yml", ".github/actions/setup/action.yml", ".GitHub/Workflows/x.yml"]) assert.equal(isCiConfigPath(path), true, path);
   for (const path of [".github/CODEOWNERS", "src/.github/workflows/x.yml", "workflows/ci.yml", ""]) assert.equal(isCiConfigPath(path), false, path);
+});
+
+test("repairs that change nothing stop the run; a pushed repair resets the count", async () => {
+  let repairs = 0;
+  const results = [false, false, true, ...Array(MAX_IDLE_REPAIRS).fill(false)];
+  const error = await finishWithGreenCI({
+    snapshot: async () => ({ state: "failed", sha: "a" }),
+    repair: async () => { repairs++; return results.shift(); },
+    closeIssue: async () => assert.fail("closed"),
+    progress: async () => {}, wait: async () => {},
+  }).catch((e) => e);
+  assert.match(error.message, /repairs that changed nothing/);
+  assert.equal(error.retryable, false);
+  assert.equal(repairs, 3 + MAX_IDLE_REPAIRS);
+});
+
+test("GitHub billing blocks are recognised as unfixable CI failures", () => {
+  assert.ok(isAccountBlockedCI(JSON.stringify([{ message: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings" }])));
+  assert.equal(isAccountBlockedCI("test: failure\nexpected 1 to equal 2"), false);
+  assert.equal(isAccountBlockedCI(undefined), false);
 });

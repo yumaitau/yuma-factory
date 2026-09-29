@@ -1,20 +1,20 @@
 # Factory
 
-A self-hosted agent software factory on Cloudflare. Connect GitHub repositories, label issues, and let Codex agents implement them in isolated containers. Factory opens a pull request, fixes failing CI until it is green, and closes the issue. Low-risk tickets can merge automatically.
+A self-hosted agent software factory on Cloudflare. Connect GitHub repositories, label issues, and let Codex or Claude Code agents implement them in isolated containers. Factory opens a pull request, fixes failing CI until it is green, and closes the issue. Low-risk tickets can merge automatically.
 
-Factory runs on Cloudflare Workers, D1, R2, Queues and Containers (the [Sandbox SDK](https://developers.cloudflare.com/sandbox/)). Agents use your own ChatGPT/Codex subscriptions. No model API keys are required.
+Factory runs on Cloudflare Workers, D1, R2, Queues and Containers (the [Sandbox SDK](https://developers.cloudflare.com/sandbox/)). Agents use your own ChatGPT (Codex) or Claude (Claude Code) subscriptions. No model API keys are required.
 
-> Codex subscriptions are subject to OpenAI's terms. Check that your plan permits the way you share and automate it.
+> Subscriptions are subject to OpenAI's and Anthropic's terms. Check that your plan permits the way you share and automate it.
 
 ## How it works
 
 1. Team members sign in with Google Workspace. Only domains in `ALLOWED_EMAIL_DOMAINS` are accepted.
-2. On **Codex subscriptions**, each member connects a ChatGPT account by device-code sign-in or by importing a Codex `auth.json`. Subscriptions are private by default; owners can share one with the team. **Test connection** runs a small coding task and its tests.
+2. On **Subscriptions**, each member connects a ChatGPT account for Codex by device-code sign-in or by importing a Codex `auth.json`, or a Claude Pro/Max account for Claude Code by pasting a token from `claude setup-token`. **Replace token** swaps in a fresh Claude token. Subscriptions are private by default; owners can share one with the team. **Test connection** runs a small coding task and its tests.
 3. Install your Factory GitHub App on selected repositories and import their issues.
 4. Assign a ticket to an agent, or label it for automatic pickup. The pool picks an idle permitted subscription with available usage, preferring the least recently used account.
-5. Codex clones the repository, implements the ticket and runs tests in a disposable container. A separate supervisor publishes the changes as a branch and ready-for-review PR, then watches checks, commit statuses and Actions runs on the PR head. Failed CI is fed back to Codex, which pushes repairs to the same branch until CI is green. Only then does the supervisor close the issue and move the ticket to Done.
+5. The agent (Codex or Claude Code, matching the subscription) clones the repository, implements the ticket and runs tests in a disposable container. A separate supervisor publishes the changes as a branch and ready-for-review PR, then watches checks, commit statuses and Actions runs on the PR head. Failed CI is fed back to Codex, which pushes repairs to the same branch until CI is green. Only then does the supervisor close the issue and move the ticket to Done.
 
-Subscriptions keep their own usage windows; the pool never combines or extends quotas. An agent's optional model must be available to its subscription; blank uses Codex's default. Interrupted runs retry with exponential backoff (one to fifteen minutes). Exhausted subscriptions wait for reset; revoked credentials need reconnecting, after which the same durable job resumes.
+Subscriptions keep their own usage windows; the pool never combines or extends quotas. An agent can be pinned to Codex or Claude subscriptions, or use any available one. A custom model requires a pinned agent and must be available to that subscription; blank uses the CLI's default. Claude usage windows (five-hour and weekly) are read from each run's rate-limit events. Interrupted runs retry with exponential backoff (one to fifteen minutes). Exhausted subscriptions wait for reset; revoked credentials need reconnecting, after which the same durable job resumes.
 
 Owners, and team members using a shared subscription, can **Disable subscription** to exclude it from new work without disconnecting it. Running jobs finish normally.
 
@@ -80,9 +80,9 @@ MCP tools are named `factory_*` and map one-to-one to the `/api/v1` routes. Exec
 ## Architecture
 
 - **Main app** (repository root): Next.js on OpenNext for Cloudflare. UI, Google SSO (Better Auth), GitHub App integration, D1 metadata, Queue consumer and cron.
-- **Runner** (`sandbox-runner/`): Worker with the Cloudflare Sandbox SDK and Codex CLI. One container and process per job.
-- **`CODEX_VAULT`**: private R2 bucket holding AES-GCM encrypted Codex logins, job records and results, keyed by the runner-only `CODEX_AUTH_KEY`. Tokens never enter D1 or browser responses.
-- GitHub credentials stay in the supervisor's root-only directory. Codex runs as an unprivileged user without them. Publication uses a separate pristine clone, so agent-controlled Git config cannot reach the installation token.
+- **Runner** (`sandbox-runner/`): Worker with the Cloudflare Sandbox SDK, Codex CLI and Claude Code. One container and process per job.
+- **`CODEX_VAULT`**: private R2 bucket holding AES-GCM encrypted Codex logins and Claude tokens, job records and results, keyed by the runner-only `CODEX_AUTH_KEY`. Tokens never enter D1 or browser responses.
+- GitHub credentials stay in the supervisor's root-only directory. The agent runs as an unprivileged user without them. Publication uses a separate pristine clone, so agent-controlled Git config cannot reach the installation token.
 - Each implementation or repair attempt has a 45-minute limit. Container loss is reported as failure, never success.
 
 ## Local development

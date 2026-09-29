@@ -5,7 +5,7 @@ import { newId } from "@/lib/ids";
 import { getDb } from "@/lib/db";
 import { parseLimits } from "@/lib/run-wait";
 import { runnerRequest } from "./runner";
-import { hasCapacity, MAX_PARALLEL_RUNS, type AccountStatus } from "@/shared/codex";
+import { hasCapacity, MAX_PARALLEL_RUNS, PROVIDER_NAMES, type AccountStatus, type Provider } from "@/shared/codex";
 
 // A claim reserves its lease before the run row exists; an abandoned claim expires.
 const pendingClaim = (lease: string) => sql.raw(`not exists (select 1 from runs r where r.id = ${lease}.holder_id) and ${lease}.created_at > unixepoch() - 600`);
@@ -89,10 +89,11 @@ export async function visibleAccounts(userId: string) {
     .orderBy(asc(codexAccounts.createdAt))
     .all();
 }
-/** Subscriptions with a free parallel slot. */
+/** Subscriptions with a free parallel slot, optionally only one provider's. */
 export async function availableAccounts(
   userId: string,
   database?: Awaited<ReturnType<typeof getDb>>,
+  provider?: Provider | null,
 ) {
   const db = database ?? (await getDb());
   const rows = await db
@@ -101,6 +102,7 @@ export async function availableAccounts(
     .where(
       and(
         eq(codexAccounts.enabled, true),
+        ...(provider ? [eq(codexAccounts.provider, provider)] : []),
         or(
           eq(codexAccounts.ownerUserId, userId),
           eq(codexAccounts.shared, true),
@@ -126,9 +128,9 @@ export async function availableSlots(userId: string, database?: Awaited<ReturnTy
   return (await availableAccounts(userId, database)).reduce((total, row) => total + row.freeSlots, 0);
 }
 
-export async function claimAccount(userId: string, runId: string, database?: Awaited<ReturnType<typeof getDb>>) {
+export async function claimAccount(userId: string, runId: string, database?: Awaited<ReturnType<typeof getDb>>, provider?: Provider | null) {
   const db = database ?? (await getDb());
-  for (const row of await availableAccounts(userId, db)) {
+  for (const row of await availableAccounts(userId, db, provider)) {
     // One INSERT...SELECT re-checks every condition, so racing claims cannot overfill a subscription.
     const claimed = await db.all(sql`insert into account_leases (holder_id, account_id, created_at)
       select ${runId}, id, unixepoch() from codex_accounts
@@ -141,7 +143,7 @@ export async function claimAccount(userId: string, runId: string, database?: Awa
     }
   }
   throw new Error(
-    "No available Codex subscription. Connect, enable or refresh an account in Codex subscriptions, or wait for a parallel run slot to free up.",
+    `No available ${provider ? `${PROVIDER_NAMES[provider]} ` : ""}subscription. Connect, enable or refresh an account in Subscriptions, or wait for a parallel run slot to free up.`,
   );
 }
 

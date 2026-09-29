@@ -84,11 +84,11 @@ export function AutomationPanel({ status, userId }: { status: AutomationStatus; 
         {status.lastEventAt && <p className="mt-1 text-xs text-muted-foreground">Last push: {status.lastEvent} · {time(status.lastEventAt)}</p>}
         {!status.lastScheduledAt && status.enabled && <p className="mt-1 text-xs text-muted-foreground">Waiting for first scheduled heartbeat. New schedules can take up to 15 minutes to activate.</p>}
         {status.error && <p role="alert" className="mt-2 whitespace-pre-line text-sm text-primary">{status.error}</p>}
-        {!status.enabled && <p className="mt-1 text-xs text-muted-foreground">Pausing stops new pickup; existing Codex runs continue.</p>}
+        {!status.enabled && <p className="mt-1 text-xs text-muted-foreground">Pausing stops new pickup; existing runs continue.</p>}
         <div className="mt-3 flex gap-4 text-xs">
           <Link className="underline" href="/work">Live work board</Link>
           <Link className="underline" href="/agents">Worker agents</Link>
-          <Link className="underline" href="/pool">Codex subscriptions</Link>
+          <Link className="underline" href="/pool">Codex and Claude subscriptions</Link>
         </div>
       </div>}
       {error && <p role="alert" className="mt-3 text-sm text-primary">{error}</p>}

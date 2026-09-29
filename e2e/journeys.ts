@@ -63,9 +63,9 @@ export async function offerGoogleWorkspace(page: Page) {
 
 export async function runPortableJourneys(page: Page, email: string) {
   await seedSession(page, email);
-  await page.getByRole("link", { name: "Codex subscriptions" }).click();
+  await page.getByRole("link", { name: "Subscriptions", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Codex subscriptions", exact: true }),
+    page.getByRole("heading", { name: "Subscriptions", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("No subscriptions connected yet.")).toBeVisible();
   await expect(

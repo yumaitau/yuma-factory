@@ -1,6 +1,9 @@
 import { getSandbox, type Sandbox as SandboxType } from "@cloudflare/sandbox";
 import {
+  isClaudeLogin,
   validateAuthFile,
+  validateClaudeToken,
+  validateStoredLogin,
   validId,
   validModel,
   type AccountStatus,
@@ -32,6 +35,8 @@ function runnerSettings(env: Env) {
   };
 }
 const home = "/home/factory/.codex";
+// Root-only: the bridge hands the Claude token to the agent process, never to the repo.
+const claudeAuth = "/factory/claude-auth.json";
 function sandbox(env: Env, id: string) {
   return getSandbox(env.Sandbox, id, { sleepAfter: "60m" });
 }
@@ -46,7 +51,7 @@ async function key(env: Env) {
 }
 async function storeAuth(env: Env, id: string, auth: string) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = new TextEncoder().encode(validateAuthFile(auth));
+  const data = new TextEncoder().encode(validateStoredLogin(auth));
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(id) },
     await key(env),
@@ -87,6 +92,11 @@ async function load(env: Env, id: string) {
 async function restore(env: Env, id: string, sb: ReturnType<typeof sandbox>) {
   const auth = await load(env, id);
   if (!auth) throw new Error("Subscription is not connected.");
+  if (isClaudeLogin(auth)) {
+    await sb.mkdir("/factory", { recursive: true });
+    await sb.writeFile(claudeAuth, auth);
+    return;
+  }
   await sb.mkdir(home, { recursive: true });
   await sb.writeFile(`${home}/auth.json`, auth);
 }
@@ -113,9 +123,11 @@ async function read<T>(
  * Parallel runs share one login, so an older copy never overwrites a newer refresh.
  */
 async function persist(env: Env, id: string, sb: ReturnType<typeof sandbox>, sameAccount = false) {
+  const stored = await load(env, id);
+  // Claude setup tokens never refresh inside the sandbox; the vault copy stays authoritative.
+  if (stored && isClaudeLogin(stored)) return;
   const file = await sb.readFile(`${home}/auth.json`);
   if (sameAccount) {
-    const stored = await load(env, id);
     const parse = (raw: string | null) => {
       try { return raw ? JSON.parse(raw) as { tokens?: { account_id?: unknown }; last_refresh?: unknown } : undefined; } catch { return undefined; }
     };
@@ -214,7 +226,7 @@ const worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health")
-      return Response.json({ ok: true, provider: "codex" });
+      return Response.json({ ok: true, providers: ["codex", "claude"] });
     if (!(await secretMatches(request.headers.get("x-runner-secret"), env.RUNNER_SHARED_SECRET)))
       return Response.json({ error: "Unauthorised" }, { status: 401 });
     const parts = url.pathname.split("/").filter(Boolean);
@@ -232,6 +244,13 @@ const worker = {
         if (request.method === "POST" && action === "connect") {
           const data = await body(request);
           await sb.mkdir("/factory", { recursive: true });
+          if (data.token) {
+            await storeAuth(env, id, validateClaudeToken(String(data.token)));
+            await restore(env, id, sb);
+            const state = await metadata(sb);
+            await sb.destroy();
+            return Response.json(state);
+          }
           if (data.auth) {
             await storeAuth(env, id, validateAuthFile(data.auth));
             await restore(env, id, sb);

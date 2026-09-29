@@ -78,7 +78,7 @@ async function Agents() {
                     <div className="min-w-0">
                       <p className="truncate font-medium">{agent.name}</p>
                       <p className="text-xs text-muted-foreground">
-                        {agent.status} · {agent.modelId ?? 'pool default'}
+                        {agent.status} · {agent.provider ? `${agent.provider} · ` : ''}{agent.modelId ?? 'pool default'}
                       </p>
                     </div>
                   </Card>

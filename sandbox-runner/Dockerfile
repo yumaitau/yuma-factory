@@ -16,8 +16,9 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
 
-# Each job gets its own container and unprivileged Codex process.
-RUN npm install -g @openai/codex@0.154.0 \
+# Each job gets its own container and unprivileged Codex or Claude Code process.
+ENV DISABLE_AUTOUPDATER=1
+RUN npm install -g @openai/codex@0.154.0 @anthropic-ai/claude-code@2.1.284 \
   && useradd --uid 10001 --create-home --shell /bin/bash factory \
   && mkdir -p /workspace \
   && chmod 1777 /workspace

@@ -18,7 +18,9 @@ import {
 } from "@/lib/codex/accounts";
 import { runnerRequest } from "@/lib/codex/runner";
 import {
+  isProvider,
   validateAuthFile,
+  validateClaudeToken,
   validId,
   type RunResult,
   type AccountStatus,
@@ -30,18 +32,23 @@ export async function connectCodexAction(form: FormData) {
     const label = String(form.get("label") ?? "").trim();
     if (!label || label.length > 80)
       throw new Error("Enter a subscription name (up to 80 characters).");
+    const provider = form.get("provider") ?? "codex";
+    if (!isProvider(provider)) throw new Error("Choose Codex or Claude.");
     const file = form.get("authFile");
     const auth =
-      file instanceof File && file.size
+      provider === "codex" && file instanceof File && file.size
         ? validateAuthFile(await file.text())
         : undefined;
+    // Claude has no device-code flow here; its setup token is the whole login.
+    const token = provider === "claude" ? claudeToken(form.get("token")) : undefined;
     const db = await getDb();
-    const id = newId("codex");
+    const id = newId(provider);
     const now = new Date();
     await db
       .insert(codexAccounts)
       .values({
         id,
+        provider,
         label,
         ownerUserId: session.user.id,
         shared: form.get("shared") === "on",
@@ -54,7 +61,7 @@ export async function connectCodexAction(form: FormData) {
       const status = await runnerRequest<AccountStatus>(
         `/accounts/${id}/connect`,
         "POST",
-        { auth },
+        { auth, token },
       );
       await saveStatus(id, status);
       revalidatePath("/pool");
@@ -141,16 +148,18 @@ export async function setCodexMaxRunsAction(id: string, maxRuns: number) {
   });
 }
 
-export async function reconnectCodexAction(id: string) {
+export async function reconnectCodexAction(id: string, newToken?: string) {
   return actionResult(async () => {
     const session = await requireSession();
+    const account = await ownedAccount(id, session.user.id);
+    const token = account.provider === "claude" ? claudeToken(newToken) : undefined;
     const lock = await lockOwnedAccount(id, session.user.id);
     try {
       await runnerRequest(`/accounts/${id}`, "DELETE");
       const status = await runnerRequest<AccountStatus>(
         `/accounts/${id}/connect`,
         "POST",
-        {},
+        { token },
       );
       const db = await getDb();
       await db
@@ -200,6 +209,11 @@ export async function testCodexStatusAction(id: string, runId: string) {
     }
     return result;
   });
+}
+
+/** The raw token only; the runner re-validates and stores it encrypted. */
+function claudeToken(value: unknown) {
+  return JSON.parse(validateClaudeToken(typeof value === "string" ? value : "")).token as string;
 }
 
 export type ActionResult<T> =

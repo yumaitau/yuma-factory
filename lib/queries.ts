@@ -304,6 +304,7 @@ export async function createAgent(input: {
   name: string;
   color?: string;
   modelId?: string | null;
+  provider?: string | null;
   systemPrompt?: string | null;
 }) {
   const db = await getDb();
@@ -315,6 +316,7 @@ export async function createAgent(input: {
     name: input.name,
     color: input.color ?? "#6366f1",
     modelId: input.modelId ?? null,
+    provider: input.provider ?? null,
     systemPrompt: input.systemPrompt ?? null,
     status: "idle",
     createdAt: now,
@@ -333,6 +335,7 @@ export async function listAgentsWithOwners() {
       color: agents.color,
       status: agents.status,
       modelId: agents.modelId,
+      provider: agents.provider,
       ownerUserId: agents.ownerUserId,
       ownerName: users.name,
       ownerEmail: users.email,

@@ -42,13 +42,13 @@ The morning digest runs only when `PAPERBOY_API_URL`, `PAPERBOY_API_KEY` and `PA
 | Name | Kind | Source |
 | --- | --- | --- |
 | `RUNNER_SHARED_SECRET` | secret | Same value as the main app's `SANDBOX_RUNNER_SECRET` |
-| `CODEX_AUTH_KEY` | secret | Random 32-byte key, base64-encoded (`openssl rand -base64 32`). Keep it: replacing it makes stored Codex logins unreadable |
+| `CODEX_AUTH_KEY` | secret | Random 32-byte key, base64-encoded (`openssl rand -base64 32`). Keep it: replacing it makes stored Codex logins and Claude tokens unreadable |
 | `FACTORY_URL` | var | Public origin of the main app, used for callbacks |
 | `LABEL_PREFIX` | var | Optional, default `factory`. Must match `NEXT_PUBLIC_LABEL_PREFIX` |
 | `COMMIT_AUTHOR_NAME` | var | Optional, default `Factory`. Author of agent commits |
 | `COMMIT_AUTHOR_EMAIL` | var | Optional, default `factory@users.noreply.github.com` |
 
-Codex login tokens are connected through the app and encrypted in the private `CODEX_VAULT` R2 bucket. They are not Worker environment secrets. No model API keys are required.
+Codex logins and Claude subscription tokens are connected through the app and encrypted in the private `CODEX_VAULT` R2 bucket. They are not Worker environment secrets. No model API keys are required.
 
 ## External settings
 
@@ -57,4 +57,4 @@ Codex login tokens are connected through the app and encrypted in the private `C
 - GitHub App webhook URL: `{BETTER_AUTH_URL}/api/github/webhook`. Subscribe to **Issues** events.
 - GitHub App permissions: Contents, Issues and Pull requests read/write; Metadata, Administration, Checks, Commit statuses and Actions read.
 
-Device-code sign-in uses the official Codex authorization page. Each subscription authorizes its own login. Owners control whether other team members may assign work to it.
+Device-code sign-in uses the official Codex authorization page. Claude subscriptions use a long-lived token from `claude setup-token` (Claude Pro or Max); Anthropic API keys are refused. Each subscription authorizes its own login. Owners control whether other team members may assign work to it.

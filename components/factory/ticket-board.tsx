@@ -272,7 +272,7 @@ export function TicketBoard({
                 </a>
               )}
               <pre className="mt-2 whitespace-pre-wrap break-words text-xs">
-                {run.log || "Codex is working in the repository…"}
+                {run.log || "Agent is working in the repository…"}
               </pre>
             </details>
           ))}

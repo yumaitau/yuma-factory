@@ -45,7 +45,20 @@ export function CreateAgentForm() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <Label htmlFor="agent-model">Codex model (optional)</Label>
+          <Label htmlFor="agent-provider">Agent</Label>
+          <select
+            id="agent-provider"
+            name="provider"
+            defaultValue=""
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+          >
+            <option value="">Any available subscription</option>
+            <option value="codex">Codex subscriptions only</option>
+            <option value="claude">Claude subscriptions only</option>
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="agent-model">Model (optional, needs an agent choice)</Label>
           <Input
             id="agent-model"
             name="modelId"

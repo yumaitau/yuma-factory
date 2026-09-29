@@ -15,7 +15,7 @@ import {
 } from "@/lib/queries";
 import { claimAccount, releaseAccount, saveStatus } from "@/lib/codex/accounts";
 import { runnerRequest } from "@/lib/codex/runner";
-import { completionStage, hasGreenCICompletion, validModel, type RunResult } from "@/shared/codex";
+import { completionStage, hasGreenCICompletion, isProvider, validModel, type RunResult } from "@/shared/codex";
 import { forEachConcurrent } from '@/lib/concurrency';
 import { applyRunOutcome, captureLearnings, memoriesForTicket, recordRunMemories } from '@/lib/memory-store';
 import { epicContext, isPlanTicket, postThreadMessage, storePlan } from '@/lib/collab-store';
@@ -29,7 +29,7 @@ export async function startCodexRun(
   options?: { automationLabel: string; automationLeaseId: string },
 ) {
   if (!validModel(modelId))
-    throw new Error("Choose a Codex model or the subscription default.");
+    throw new Error("Choose a model or the subscription default.");
   const db = await getDb();
   const context = await getTicketWithContext(ticketId);
   const agent = await db
@@ -51,7 +51,8 @@ export async function startCodexRun(
     epic: epic?.epic, siblings: epic?.siblings, thread: epic?.thread,
   });
   const runId = newId("run");
-  const account = await claimAccount(userId, runId);
+  // A pinned provider keeps a provider-specific model off the other CLI.
+  const account = await claimAccount(userId, runId, db, isProvider(agent.provider) ? agent.provider : null);
   let inserted = false;
   let claimedTicket = false;
   let claimedAgent = false;

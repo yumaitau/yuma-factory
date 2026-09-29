@@ -20,7 +20,7 @@ const dmSans = DM_Sans({
 export const metadata: Metadata = {
   title: { default: APP_NAME, template: `%s | ${APP_NAME}` },
   description:
-    "Agent software factory: GitHub issues in, reviewed pull requests out, powered by Codex subscriptions.",
+    "Agent software factory: GitHub issues in, reviewed pull requests out, powered by Codex and Claude subscriptions.",
   icons: { icon: "/favicon.svg" },
 };
 

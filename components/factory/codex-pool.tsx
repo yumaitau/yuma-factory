@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { MAX_PARALLEL_RUNS, type AccountStatus, type RunResult } from "@/shared/codex";
+import { isProvider, MAX_PARALLEL_RUNS, PROVIDER_NAMES, type AccountStatus, type Provider, type RunResult } from "@/shared/codex";
 
 async function call<T>(promise: Promise<ActionResult<T>>): Promise<T> {
   const result = await promise;
@@ -28,6 +28,7 @@ async function call<T>(promise: Promise<ActionResult<T>>): Promise<T> {
 
 type Entry = {
   id: string;
+  provider: string;
   label: string;
   ownerUserId: string;
   email: string | null;
@@ -57,6 +58,7 @@ export function CodexPool({
   const [login, setLogin] = useState<(AccountStatus & { id: string }) | null>(
     null,
   );
+  const [provider, setProvider] = useState<Provider>("codex");
   const form = useRef<HTMLFormElement>(null);
   const router = useRouter();
   const act = (fn: () => Promise<unknown>) =>
@@ -100,11 +102,12 @@ export function CodexPool({
     <>
       <Card className="mb-6 p-5">
         <h2 className="mb-2 text-lg font-semibold">
-          Connect a Codex subscription
+          Connect a subscription
         </h2>
         <p className="mb-4 text-sm text-muted-foreground">
-          Sign in with each ChatGPT account. Each subscription keeps its own
-          usage limits; one development run uses one account at a time.
+          Sign in with each ChatGPT account for Codex, or add a Claude
+          subscription token for Claude Code. Each subscription keeps its own
+          usage limits.
         </p>
         <form
           ref={form}
@@ -117,6 +120,16 @@ export function CodexPool({
           }
           className="space-y-4"
         >
+          <fieldset className="flex gap-4 text-sm">
+            <legend className="sr-only">Agent</legend>
+            {(["codex", "claude"] as const).map((value) => (
+              <label key={value} className="flex items-center gap-2">
+                <input type="radio" name="provider" value={value} checked={provider === value}
+                  onChange={() => setProvider(value)} />
+                {PROVIDER_NAMES[value]}
+              </label>
+            ))}
+          </fieldset>
           <div>
             <Label htmlFor="codex-label">Account name</Label>
             <Input
@@ -124,7 +137,7 @@ export function CodexPool({
               name="label"
               required
               maxLength={80}
-              placeholder="Justin’s Codex"
+              placeholder={`Justin’s ${PROVIDER_NAMES[provider]}`}
             />
           </div>
           <label className="flex items-center gap-2 text-sm">
@@ -135,6 +148,18 @@ export function CodexPool({
             <input type="checkbox" name="shared" />
             Allow team members to assign work to this subscription
           </label>
+          {provider === "claude" ? (
+            <div>
+              <Label htmlFor="claude-token">Claude subscription token</Label>
+              <Input id="claude-token" name="token" type="password" required autoComplete="off"
+                placeholder="sk-ant-oat01-…" />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Run <code>claude setup-token</code> on a machine signed in to the Claude
+                Pro or Max account, then paste the token. It is stored encrypted and never
+                shown to other members. API keys are not supported.
+              </p>
+            </div>
+          ) : (
           <details>
             <summary className="cursor-pointer text-sm">
               Already signed in to Codex on another machine?
@@ -151,8 +176,9 @@ export function CodexPool({
               accept=".json,application/json"
             />
           </details>
+          )}
           <Button disabled={pending}>
-            {pending ? "Connecting…" : "Connect Codex"}
+            {pending ? "Connecting…" : `Connect ${PROVIDER_NAMES[provider]}`}
           </Button>
         </form>
         {login?.status === "connecting" && login.verificationUrl && (
@@ -209,12 +235,16 @@ export function CodexPool({
             ? (JSON.parse(entry.limitsJson) as AccountStatus["limits"])
             : null;
           const own = entry.ownerUserId === userId;
+          const agentName = PROVIDER_NAMES[isProvider(entry.provider) ? entry.provider : "codex"];
           // Maintenance needs the subscription to itself: no runs and no other operation.
           const busy = !!entry.activeRunId || entry.runningRuns > 0;
           return (
             <Card key={entry.id} className="p-5">
               <div className="flex justify-between gap-3">
-                <h2 className="font-semibold">{entry.label}</h2>
+                <h2 className="font-semibold">
+                  {entry.label}{" "}
+                  <span className="text-xs font-normal text-muted-foreground">{agentName}</span>
+                </h2>
                 <span className="text-sm">
                   {!entry.enabled ? (entry.runningRuns ? "Disabled · finishing current runs" : "Disabled")
                     : entry.runningRuns ? `Running ${entry.runningRuns}/${entry.maxRuns}` : entry.activeRunId ? "Busy" : entry.status}
@@ -245,7 +275,7 @@ export function CodexPool({
               })}
               {!limits && (
                 <p className="mt-3 text-xs text-muted-foreground">
-                  Usage availability not yet reported by Codex.
+                  Usage availability not yet reported by {agentName}.
                 </p>
               )}
               {entry.error && (
@@ -288,7 +318,7 @@ export function CodexPool({
                   >
                     Test connection
                   </Button>
-                  <Button
+                  {entry.provider !== "claude" && <Button
                     size="sm"
                     variant="outline"
                     disabled={pending || busy}
@@ -299,7 +329,7 @@ export function CodexPool({
                     }
                   >
                     Reconnect
-                  </Button>
+                  </Button>}
                   <Button
                     size="sm"
                     disabled={pending || busy}
@@ -334,6 +364,14 @@ export function CodexPool({
                   </Button>
                   </>}
                 </div>
+              )}
+              {own && entry.provider === "claude" && (
+                <form className="mt-3 flex gap-2"
+                  action={(data) => act(async () => setLogin(await call(reconnectCodexAction(entry.id, String(data.get("token") ?? "")))))}>
+                  <Input name="token" type="password" required autoComplete="off" aria-label="New Claude token"
+                    placeholder="New claude setup-token" disabled={pending || busy} />
+                  <Button size="sm" variant="outline" disabled={pending || busy}>Replace token</Button>
+                </form>
               )}
             </Card>
           );

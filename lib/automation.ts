@@ -160,7 +160,7 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
       summary = runsStarted ? `Started ${runsStarted} parallel run${runsStarted === 1 ? '' : 's'}. Remaining tickets wait for free agents and subscriptions.`
         : !candidates.length ? `No unattempted open tickets labelled ${settings.label}.`
         : !idle.length ? 'All worker agents are busy or disabled. Eligible tickets remain queued.'
-        : !capacity ? 'Waiting for an enabled, available Codex subscription. Eligible tickets remain queued.'
+        : !capacity ? 'Waiting for an enabled, available subscription. Eligible tickets remain queued.'
         : 'Eligible tickets remain queued for the next check.';
       if (dispatchErrors.length) errors.push(...dispatchErrors);
     }

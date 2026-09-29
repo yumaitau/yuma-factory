@@ -76,6 +76,35 @@ export function validateAuthFile(raw: string): string {
     last_refresh: value.last_refresh,
   });
 }
+/** Agent CLIs a subscription can drive. */
+export const PROVIDERS = ["codex", "claude"] as const;
+export type Provider = (typeof PROVIDERS)[number];
+export const PROVIDER_NAMES: Record<Provider, string> = { codex: "Codex", claude: "Claude" };
+export function isProvider(value: unknown): value is Provider {
+  return PROVIDERS.includes(value as Provider);
+}
+/** A long-lived Claude subscription token from `claude setup-token`; API keys are refused. */
+export function validateClaudeToken(raw: string): string {
+  const token = raw.trim();
+  if (!/^sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,500}$/.test(token))
+    throw new Error(
+      "Paste a token from `claude setup-token` on a Claude subscription. API keys are not supported.",
+    );
+  return JSON.stringify({ auth_mode: "claude_oauth", token });
+}
+export function isClaudeLogin(raw: string) {
+  try {
+    return JSON.parse(raw).auth_mode === "claude_oauth";
+  } catch {
+    return false;
+  }
+}
+/** Validate either stored login kind before it enters the vault. */
+export function validateStoredLogin(raw: string): string {
+  return isClaudeLogin(raw)
+    ? validateClaudeToken(String(JSON.parse(raw).token ?? ""))
+    : validateAuthFile(raw);
+}
 export function validId(id: string) {
   return /^[a-z]+_[a-f0-9]{32}$/.test(id);
 }

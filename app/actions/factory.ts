@@ -22,6 +22,7 @@ import {
   type TicketStage,
 } from "@/lib/queries";
 import { TICKET_RISKS } from "@/shared/ticket-risk";
+import { PROVIDERS } from "@/shared/codex";
 import { requireSession } from "@/lib/session";
 
 /**
@@ -169,7 +170,10 @@ const createAgentSchema = z.object({
     .string()
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/)
     .optional(),
+  provider: z.enum(PROVIDERS).optional(),
   systemPrompt: z.string().max(4000).optional(),
+}).refine((input) => !input.modelId || input.provider, {
+  message: "Choose Codex or Claude for a custom model.",
 });
 
 export async function createAgentAction(formData: FormData) {
@@ -178,6 +182,7 @@ export async function createAgentAction(formData: FormData) {
     name: formData.get("name"),
     color: formData.get("color") || undefined,
     modelId: formData.get("modelId") || undefined,
+    provider: formData.get("provider") || undefined,
     systemPrompt: formData.get("systemPrompt") || undefined,
   });
   await createAgent({
@@ -185,6 +190,7 @@ export async function createAgentAction(formData: FormData) {
     name: input.name,
     color: input.color,
     modelId: input.modelId ?? null,
+    provider: input.provider ?? null,
     systemPrompt: input.systemPrompt ?? null,
   });
   revalidatePath("/agents");

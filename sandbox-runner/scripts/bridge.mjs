@@ -4,14 +4,17 @@ import { evaluateCI, finishCommitCI, isAccountBlockedCI, isCiConfigPath, finishW
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { createHash } from "node:crypto";
-import { executionOutput, jsonLines, redactOutput } from "./output.mjs";
+import { claudeLimits, claudeOutput, executionOutput, jsonLines, redactOutput } from "./output.mjs";
 
 const root = "/factory";
 const home = "/home/factory/.codex";
-const env = { ...process.env, CODEX_HOME: home };
+const env = { ...process.env, CODEX_HOME: home, DISABLE_AUTOUPDATER: "1" };
 for (const key of [
   "OPENAI_API_KEY",
   "CODEX_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
@@ -65,6 +68,60 @@ async function readNoFollow(file) {
   }
 }
 
+/** A Claude subscription's setup token, written root-only by the runner; null for Codex. */
+async function claudeToken() {
+  try {
+    const login = JSON.parse(await fs.readFile(`${root}/claude-auth.json`, "utf8"));
+    return login.auth_mode === "claude_oauth" && typeof login.token === "string" ? login.token : null;
+  } catch {
+    return null;
+  }
+}
+const claudeAccountKey = (token) => createHash("sha256").update(`claude\0${token}`).digest("hex");
+/** Claude Code as the unprivileged agent user, with the subscription token and no ambient MCP servers. */
+function claudeArgs(extra = []) {
+  return ["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--strict-mcp-config", ...extra];
+}
+const claudeEnv = (token, extra = {}) => ({ ...env, HOME: "/home/factory", CLAUDE_CODE_OAUTH_TOKEN: token, ...extra });
+const limitedStatus = (limits) => [limits?.primary, limits?.secondary].some(
+  (w) => w && w.usedPercent >= 100 && (!w.resetsAt || w.resetsAt > Date.now() / 1000),
+);
+/** Verify a Claude token with a one-word reply; its rate-limit event reports usage windows. */
+async function claudeStatus(token) {
+  let limits = null;
+  let failure;
+  const events = jsonLines((event) => {
+    if (event.type === "rate_limit_event") limits = claudeLimits(event.rate_limit_info) ?? limits;
+    if (event.type === "result" && event.is_error) failure = String(event.result ?? "");
+  });
+  await fs.mkdir("/tmp/factory-status", { recursive: true });
+  await fs.chown("/tmp/factory-status", 10001, 10001);
+  try {
+    await command("claude", claudeArgs(["--model", "haiku"]), {
+      env: claudeEnv(token),
+      uid: 10001,
+      gid: 10001,
+      cwd: "/tmp/factory-status",
+      timeout: 90000,
+      input: "Reply with the single word OK. Do not use tools.",
+      onStdout: (chunk) => events.push(chunk),
+    });
+  } catch {
+    failure ??= "Claude exited with an error.";
+  } finally {
+    events.end();
+  }
+  if (failure && !limitedStatus(limits))
+    throw new Error(/limit/i.test(failure)
+      ? "Claude subscription usage limit reached. Wait for its reset."
+      : "Claude rejected this subscription token. Replace it with a new `claude setup-token` token.");
+  return {
+    status: limitedStatus(limits) ? "limited" : "ready",
+    plan: "Claude subscription",
+    accountKey: claudeAccountKey(token),
+    limits,
+  };
+}
 function appServer(asAgent = false) {
   const child = spawn("codex", ["app-server"], {
     env: asAgent ? { ...env, HOME: "/home/factory" } : env,
@@ -162,6 +219,15 @@ async function status(server) {
   };
 }
 async function account(mode) {
+  const token = await claudeToken();
+  if (token) {
+    try {
+      await write("account", await claudeStatus(token));
+    } catch (e) {
+      await write("account", { status: "error", error: e.message.includes("Claude") ? e.message : "Claude status check failed. Try again." });
+    }
+    return;
+  }
   const server = appServer();
   try {
     await server.init();
@@ -245,7 +311,10 @@ async function run() {
   const logs = [];
   let inputTokens = 0,
     outputTokens = 0;
-  const sensitive = new Set([req.githubToken].filter(Boolean));
+  const claude = await claudeToken();
+  const agentName = claude ? "Claude" : "Codex";
+  let claudeLimitsSeen = null;
+  const sensitive = new Set([req.githubToken, claude].filter(Boolean));
   const rememberTokens = async () => {
     try {
       const auth = JSON.parse(await fs.readFile(`${home}/auth.json`, "utf8"));
@@ -339,16 +408,19 @@ async function run() {
   };
   const progress = async (message) => { appendLog(message); await flushProgress(); };
   try {
-    const server = appServer();
-    let initial;
-    try {
-      await server.init();
-      initial = await status(server);
-    } finally {
-      server.child.kill();
+    // Claude reports usage on each request; checking first would spend it. Claims already skip exhausted accounts.
+    if (!claude) {
+      const server = appServer();
+      let initial;
+      try {
+        await server.init();
+        initial = await status(server);
+      } finally {
+        server.child.kill();
+      }
+      if (initial.status !== "ready")
+        throw new Error("Subscription usage limit reached. Wait for its reset.");
     }
-    if (initial.status !== "ready")
-      throw new Error("Subscription usage limit reached. Wait for its reset.");
     let existingPR;
     let existingBranch;
     if (!req.probe && req.mode !== "plan") {
@@ -394,13 +466,17 @@ async function run() {
     await fs.chmod(notesDir, 0o1777);
     await progress(
       req.probe
-        ? "Checking Codex subscription execution."
+        ? `Checking ${agentName} subscription execution.`
         : `Repository cloned: ${req.repoFullName}`,
     );
     // Live channel: team memory and the epic thread over MCP, scoped to this run by its token.
     const channelEnv = {};
+    let claudeMcp;
     if (typeof req.runToken === "string" && typeof req.factoryUrl === "string" && /^https?:\/\/[^\s"]+$/.test(req.factoryUrl)) {
       sensitive.add(req.runToken);
+      claudeMcp = JSON.stringify({ mcpServers: { factory: {
+        type: "http", url: `${req.factoryUrl.replace(/\/+$/, "")}/api/runs/mcp`, headers: { Authorization: `Bearer ${req.runToken}` },
+      } } });
       await fs.appendFile(`${home}/config.toml`, [
         "", "[mcp_servers.factory]",
         `url = ${JSON.stringify(`${req.factoryUrl.replace(/\/+$/, "")}/api/runs/mcp`)}`,
@@ -420,13 +496,28 @@ async function run() {
     ];
     if (req.model) args.push("-m", req.model);
     args.push("-");
+    const claudeCommand = claudeArgs([
+      "--dangerously-skip-permissions",
+      ...(claudeMcp ? ["--mcp-config", claudeMcp] : []),
+      ...(req.model ? ["--model", req.model] : []),
+    ]);
     const execute = async (prompt) => {
+      let claudeSummary = "";
+      let claudeFailure;
       const events = jsonLines((event) => {
-        const message = executionOutput(event);
+        const message = claude ? claudeOutput(event) : executionOutput(event);
         if (message) appendLog(message);
         if (event.type === "turn.completed") {
           inputTokens += event.usage?.input_tokens ?? 0;
           outputTokens += event.usage?.output_tokens ?? 0;
+        }
+        if (event.type === "rate_limit_event") claudeLimitsSeen = claudeLimits(event.rate_limit_info) ?? claudeLimitsSeen;
+        if (claude && event.type === "result") {
+          const usage = event.usage ?? {};
+          inputTokens += (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
+          outputTokens += usage.output_tokens ?? 0;
+          if (event.is_error) claudeFailure = true;
+          else if (typeof event.result === "string") claudeSummary = event.result;
         }
       });
       let flushing = false;
@@ -435,18 +526,24 @@ async function run() {
         flushing = true;
         void flushProgress().catch(() => {}).finally(() => { flushing = false; });
       }, 1000);
-      // Codex runs as an unprivileged user inside this disposable container, without GitHub credentials.
-      try { await command("codex", args, {
-        env: { ...env, HOME: "/home/factory", ...channelEnv },
-        uid: 10001,
-        gid: 10001,
-        timeout: 45 * 60 * 1000,
-        input: prompt,
-        onStdout: (chunk) => events.push(chunk),
-      }); } catch {
+      // The agent runs as an unprivileged user inside this disposable container, without GitHub credentials.
+      try {
+        await command(claude ? "claude" : "codex", claude ? claudeCommand : args, {
+          env: claude ? claudeEnv(claude) : { ...env, HOME: "/home/factory", ...channelEnv },
+          uid: 10001,
+          gid: 10001,
+          timeout: 45 * 60 * 1000,
+          input: prompt,
+          ...(claude ? { cwd: work } : {}),
+          onStdout: (chunk) => events.push(chunk),
+        });
+        if (claudeFailure) throw new Error("Claude reported an error.");
+      } catch {
         // Raw JSONL can contain private protocol fields. Public errors already
         // arrive through the event allowlist; never append raw stdout/stderr.
-        throw new Error("Codex execution stopped. See execution events above; the runner will reconcile recovery.");
+        if (limitedStatus(claudeLimitsSeen))
+          throw new Error("Subscription usage limit reached. Wait for its reset.");
+        throw new Error(`${agentName} execution stopped. See execution events above; the runner will reconcile recovery.`);
       } finally {
         clearInterval(timer);
         events.end();
@@ -454,7 +551,7 @@ async function run() {
       }
       await rememberTokens();
       const summary = redact(
-        await fs.readFile("/workspace/summary.txt", "utf8"),
+        claude ? claudeSummary : await fs.readFile("/workspace/summary.txt", "utf8"),
       ).slice(0, 16000);
       appendLog(summary);
       await collectNotes();
@@ -699,7 +796,7 @@ async function run() {
           title: req.prTitle,
           head: publishBranch,
           base: req.defaultBranch,
-          body: `Addresses #${req.issueNumber}.\n\nFixes the default branch pipeline after the previous merge.\n\nDeveloped with a connected Codex subscription. The ticket stays open until that pipeline passes.`,
+          body: `Addresses #${req.issueNumber}.\n\nFixes the default branch pipeline after the previous merge.\n\nDeveloped with a connected ${agentName} subscription. The ticket stays open until that pipeline passes.`,
           draft: false,
         });
         pullRequestUrl = follow.html_url;
@@ -731,7 +828,7 @@ async function run() {
           title: req.prTitle,
           head: publishBranch,
           base: req.defaultBranch,
-          body: `Addresses #${req.issueNumber}.\n\n${summary}\n\nDeveloped with a connected Codex subscription. The ticket stays open until CI passes.`,
+          body: `Addresses #${req.issueNumber}.\n\n${summary}\n\nDeveloped with a connected ${agentName} subscription. The ticket stays open until CI passes.`,
           draft: false,
         });
         pullRequestUrl = pr.html_url;
@@ -745,17 +842,27 @@ async function run() {
     appendLog(e.message);
     result = { status: "failed", pullRequestUrl: e.pullRequestUrl ?? pullRequestUrl, ...(e.retryable === false ? { retryable: false } : {}) };
   }
-  const server = appServer(!req.probe);
-  try {
-    await server.init();
-    result.accountStatus = await status(server);
-  } catch {
+  if (claude) {
+    // The run's own rate-limit events report usage; no extra request is spent.
     result.accountStatus = {
-      status: "error",
-      error: "Codex session needs reconnecting.",
+      status: limitedStatus(claudeLimitsSeen) ? "limited" : "ready",
+      plan: "Claude subscription",
+      accountKey: claudeAccountKey(claude),
+      limits: claudeLimitsSeen,
     };
-  } finally {
-    server.child.kill();
+  } else {
+    const server = appServer(!req.probe);
+    try {
+      await server.init();
+      result.accountStatus = await status(server);
+    } catch {
+      result.accountStatus = {
+        status: "error",
+        error: "Codex session needs reconnecting.",
+      };
+    } finally {
+      server.child.kill();
+    }
   }
   await rememberTokens();
   await write("result", {

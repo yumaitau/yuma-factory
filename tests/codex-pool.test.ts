@@ -149,3 +149,14 @@ test("paused runs keep their slot and resume only onto a usable subscription", a
   assert.equal((await claimAccount("a", "after-stop", db)).id, "shared");
   sqlite.close();
 });
+
+test("agents pinned to a provider only claim that provider's subscriptions", async () => {
+  const { db, sqlite } = database();
+  await db.insert(schema.codexAccounts).values([account("codex_one", "a"), account("claude_one", "a", { provider: "claude" })]);
+  assert.equal((await claimAccount("a", "claude-run", db, "claude")).id, "claude_one");
+  assert.equal((await claimAccount("a", "codex-run", db, "codex")).id, "codex_one");
+  await setAccountEnabled("claude_one", "a", false, db);
+  await assert.rejects(claimAccount("a", "claude-run-2", db, "claude"), /No available Claude subscription/);
+  assert.equal((await claimAccount("a", "any-run", db)).id, "codex_one");
+  sqlite.close();
+});

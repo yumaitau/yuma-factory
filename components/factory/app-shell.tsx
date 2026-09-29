@@ -11,7 +11,7 @@ const NAV = [
   { href: "/plans", label: "Plans" },
   { href: "/memory", label: "Memory" },
   { href: "/agents", label: "Agents" },
-  { href: "/pool", label: "Codex subscriptions" },
+  { href: "/pool", label: "Subscriptions" },
 ];
 
 export function AppShell({

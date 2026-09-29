@@ -10,9 +10,9 @@ test("Factory navigation and protected subscription API", async ({
   const email = uniqueEmail("navigation");
   try {
     await seedSession(page, email);
-    await page.getByRole("link", { name: "Codex subscriptions" }).click();
+    await page.getByRole("link", { name: "Subscriptions", exact: true }).click();
     await expect(
-      page.getByRole("heading", { name: "Connect a Codex subscription" }),
+      page.getByRole("heading", { name: "Connect a subscription" }),
     ).toBeVisible();
     await page.reload();
     await expect(page.getByLabel("Account name")).toBeVisible();

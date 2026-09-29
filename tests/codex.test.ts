@@ -7,6 +7,9 @@ import {
   validId,
   validModel,
   validateAuthFile,
+  validateClaudeToken,
+  validateStoredLogin,
+  isClaudeLogin,
 } from "../shared/codex";
 test("both subscription windows constrain availability until their reset", () => {
   assert.equal(
@@ -98,4 +101,14 @@ test("ticket only reaches done when the GitHub issue was verifiably closed", () 
   assert.equal(completionStage("failed", true), "assigned");
   assert.equal(completionStage("cancelled", false), "intake");
   assert.equal(completionStage("cancelled", true), "intake");
+});
+
+test("Claude logins accept setup tokens and refuse API keys", () => {
+  const token = `sk-ant-oat01-${"a".repeat(40)}`;
+  const stored = validateClaudeToken(` ${token}\n`);
+  assert.deepEqual(JSON.parse(stored), { auth_mode: "claude_oauth", token });
+  assert.equal(isClaudeLogin(stored), true);
+  assert.equal(validateStoredLogin(stored), stored);
+  assert.throws(() => validateClaudeToken(`sk-ant-api03-${"a".repeat(40)}`), /setup-token/);
+  assert.throws(() => validateStoredLogin(JSON.stringify({ auth_mode: "claude_oauth", token: "nope" })), /setup-token/);
 });

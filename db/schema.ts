@@ -156,8 +156,10 @@ export const agents = sqliteTable(
     name: text("name").notNull(),
     // Display accent so each owner's agents are visually distinct on a board.
     color: text("color").notNull().default("#6366f1"),
-    // Optional Codex model; null uses the subscription default.
+    // Optional model; null uses the subscription default.
     modelId: text("model_id"),
+    // 'codex' | 'claude' pins the agent CLI; null uses any available subscription.
+    provider: text("provider"),
     systemPrompt: text("system_prompt"),
     status: text("status").notNull().default("idle"), // 'idle' | 'working' | 'disabled'
     automationSlot: integer("automation_slot").unique(),
@@ -244,9 +246,10 @@ export const runs = sqliteTable(
   ],
 );
 
-/** Connected Codex subscriptions. OAuth credentials live only in the runner's encrypted vault. */
+/** Connected Codex and Claude subscriptions. Credentials live only in the runner's encrypted vault. */
 export const codexAccounts = sqliteTable("codex_accounts", {
   id: text("id").primaryKey(),
+  provider: text("provider").notNull().default("codex"), // 'codex' | 'claude'
   ownerUserId: text("owner_user_id")
     .notNull()
     .references(() => users.id),

@@ -20,6 +20,22 @@ import { forEachConcurrent } from '@/lib/concurrency';
 import { applyRunOutcome, captureLearnings, memoriesForTicket, recordRunMemories } from '@/lib/memory-store';
 import { epicContext, isPlanTicket, postThreadMessage, storePlan } from '@/lib/collab-store';
 import { buildRunPrompt } from '@/lib/run-prompt';
+import { updateGithubIssueStatus, type IssueRunStatus } from '@/lib/github-status';
+
+/** Status visibility is advisory and must never strand a run or its account. */
+async function publishIssueStatus(ticketId: string, status: IssueRunStatus) {
+  try {
+    const context = await getTicketWithContext(ticketId);
+    if (!context?.installation) throw new Error('GitHub installation unavailable.');
+    const [owner, repo] = context.project.repoFullName.split('/');
+    const client = await getGithubApp().getInstallationOctokit(context.installation.installationId);
+    await updateGithubIssueStatus(client, owner, repo, context.ticket.githubIssueNumber, status);
+  } catch {
+    await getDb().then((db) => db.update(runs).set({
+      log: sql`substr(coalesce(${runs.log}, '') || char(10) || 'Factory could not update the GitHub issue status.', -100000)`,
+    }).where(eq(runs.id, status.runId))).catch(() => {});
+  }
+}
 
 export async function startCodexRun(
   ticketId: string,
@@ -108,6 +124,7 @@ export async function startCodexRun(
     inserted = true;
     // Usage tracking is advisory; it must never block a run from starting.
     await recordRunMemories(db, runId, memory.selected.map((item) => item.id)).catch(() => {});
+    await publishIssueStatus(ticketId, { runId, status: 'running' });
     dispatched = true;
     await runnerRequest(`/runs/${runId}`, "POST", {
       accountId: account.id,
@@ -286,7 +303,13 @@ export async function completeCodexRun(runId: string, result: RunResult) {
       .returning({ id: runs.id }),
   ]);
   // Only the completion that finished the run captures memory, so retries never double count.
-  if (finished.length) await afterRun(run, result, ciComplete);
+  if (finished.length) {
+    await publishIssueStatus(run.ticketId, {
+      runId, status: result.status, issueClosed: !!completedLabels,
+      pullRequestUrl: result.pullRequestUrl ?? run.pullRequestUrl,
+    });
+    await afterRun(run, result, ciComplete);
+  }
 }
 
 /** Post-run capture: learnings, outcome feedback, handoff to the epic thread, plan proposals. */

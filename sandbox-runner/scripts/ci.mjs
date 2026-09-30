@@ -103,7 +103,9 @@ export function isLowRisk(labels, prefix) {
 }
 
 /**
- * SHA-pinned merge for a confirmed-green PR. Already merged is success.
+ * SHA-pinned merge commit for a confirmed-green PR, so every PR commit lands on the
+ * base branch unchanged. Never squashes or rebases: a repository that disallows merge
+ * commits leaves the PR for a human. Already merged is success.
  * Branch-protection / review blocks return "blocked" so the ticket can still close.
  */
 export async function mergeGreenPullRequest({ github, pullNumber, sha }) {
@@ -111,25 +113,15 @@ export async function mergeGreenPullRequest({ github, pullNumber, sha }) {
   if (pr.merged) return { result: "already-merged", sha: pr.merge_commit_sha || null };
   if (pr.state !== "open") throw new Error("Pull request closed before merge. Ticket left open.");
   if (!pr.head?.sha || pr.head.sha !== sha) throw new Error("PR head changed before merge. Ticket left open.");
-  let blocked;
-  for (const merge_method of ["squash", "merge"]) {
-    try {
-      const result = await github(`/pulls/${pullNumber}/merge`, "PUT", { sha, merge_method });
-      if (result.merged) return { result: merge_method, sha: result.sha || null };
-      blocked = new Error(result.message || "GitHub did not merge the pull request.");
-    } catch (error) {
-      const message = `${error.apiMessage ?? ""} ${error.message ?? ""}`;
-      if (error.status === 409) throw new Error("PR head changed before merge. Ticket left open.");
-      if (error.status === 405 && /merge method/i.test(message)) {
-        blocked = error;
-        continue;
-      }
-      if (error.status === 405 || error.status === 422) return { result: "blocked", sha: null };
-      throw error;
-    }
+  try {
+    const result = await github(`/pulls/${pullNumber}/merge`, "PUT", { sha, merge_method: "merge" });
+    return result.merged ? { result: "merge", sha: result.sha || null } : { result: "blocked", sha: null };
+  } catch (error) {
+    if (error.status === 409) throw new Error("PR head changed before merge. Ticket left open.");
+    // 405 includes "merge commits not allowed": leave the PR for review rather than squash.
+    if (error.status === 405 || error.status === 422) return { result: "blocked", sha: null };
+    throw error;
   }
-  if (blocked) return { result: "blocked", sha: null };
-  throw new Error("Could not merge pull request. Ticket left open.");
 }
 
 export const NO_PR_CI_MS = 30 * 60_000;

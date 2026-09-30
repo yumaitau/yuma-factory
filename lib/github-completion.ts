@@ -35,19 +35,16 @@ async function mergeGreenPullRequest(client: GithubClient, owner: string, repo: 
   if (pr.merged) return 'already-merged' as const;
   if (pr.state !== 'open') throw new Error('Pull request closed before merge. Ticket left open.');
   if (pr.head.sha !== sha) throw new Error('PR head changed before merge. Ticket left open.');
-  for (const merge_method of ['squash', 'merge'] as const) {
-    try {
-      const { data } = await client.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', { ...params, sha, merge_method });
-      if (data.merged) return merge_method;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : error && typeof error === 'object' && 'message' in error ? String((error as { message: unknown }).message) : '';
-      if (statusOf(error) === 409) throw new Error('PR head changed before merge. Ticket left open.');
-      if (statusOf(error) === 405 && /merge method/i.test(message)) continue;
-      if (statusOf(error) === 405 || statusOf(error) === 422) return 'blocked' as const;
-      throw error;
-    }
+  // Merge commit only: every PR commit lands unchanged. Never squash or rebase;
+  // a repository that disallows merge commits leaves the PR for review.
+  try {
+    const { data } = await client.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', { ...params, sha, merge_method: 'merge' });
+    return data.merged ? 'merge' as const : 'blocked' as const;
+  } catch (error) {
+    if (statusOf(error) === 409) throw new Error('PR head changed before merge. Ticket left open.');
+    if (statusOf(error) === 405 || statusOf(error) === 422) return 'blocked' as const;
+    throw error;
   }
-  return 'blocked' as const;
 }
 
 /** Replace Factory-owned <prefix>:risk:* labels. Human severity/risk labels stay. */

@@ -28,7 +28,7 @@ Factory-owned GitHub labels use a configurable prefix (`NEXT_PUBLIC_LABEL_PREFIX
 | `factory:done` | Applied when Factory completes a ticket |
 | `factory:risk:low` / `medium` / `high` | Risk rating set from the project board |
 
-`risk:low` and `severity:low` are also recognised. Conflicting labels keep the highest risk. Low-risk PRs merge automatically after green CI when GitHub allows it (squash, then merge). Unrated tickets never auto-merge, and auto-merge never bypasses branch protection.
+`risk:low` and `severity:low` are also recognised. Conflicting labels keep the highest risk. Low-risk PRs merge automatically after green CI with a merge commit, so every PR commit lands unchanged. Factory never squashes or rebases; if a repository disallows merge commits, the PR is left for review. Unrated tickets never auto-merge, and auto-merge never bypasses branch protection.
 
 ## Automatic pickup and the work board
 

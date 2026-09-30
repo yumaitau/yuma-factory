@@ -111,7 +111,7 @@ test("policy lookup errors fail closed; only confirmed unprotected branches allo
 });
 
 
-test("low-risk merge is SHA-pinned, prefers squash, and treats already-merged as success", async () => {
+test("low-risk merge is SHA-pinned, uses a merge commit, and treats already-merged as success", async () => {
   const calls = [];
   const github = async (path, method = "GET", body) => {
     calls.push({ path, method, body });
@@ -119,26 +119,23 @@ test("low-risk merge is SHA-pinned, prefers squash, and treats already-merged as
     if (method === "PUT") return { merged: true, sha: "merged" };
     throw new Error(`unexpected ${method} ${path}`);
   };
-  assert.deepEqual(await mergeGreenPullRequest({ github, pullNumber: 4, sha: "abc" }), { result: "squash", sha: "merged" });
-  assert.equal(calls.at(-1)?.body.merge_method, "squash");
+  assert.deepEqual(await mergeGreenPullRequest({ github, pullNumber: 4, sha: "abc" }), { result: "merge", sha: "merged" });
+  assert.equal(calls.at(-1)?.body.merge_method, "merge");
   assert.deepEqual(await mergeGreenPullRequest({
     github: async (path) => path === "/pulls/4" ? { merged: true, state: "closed", head: { sha: "abc" }, merge_commit_sha: "landed" } : assert.fail("merged PRs must not PUT"),
     pullNumber: 4, sha: "abc",
   }), { result: "already-merged", sha: "landed" });
 });
 
-test("disallowed squash falls back; review blocks do not throw; SHA drift does", async () => {
-  let method;
-  const fallback = async (_path, verb = "GET", body) => {
+test("never squashes: disallowed merge commits and review blocks leave the PR; SHA drift throws", async () => {
+  const methods = [];
+  const noMergeCommits = async (_path, verb = "GET", body) => {
     if (verb === "GET") return { merged: false, state: "open", head: { sha: "abc" } };
-    if (body.merge_method === "squash") {
-      throw Object.assign(new Error("failed"), { status: 405, apiMessage: "Merge method squash is not allowed on this repository." });
-    }
-    method = body.merge_method;
-    return { merged: true, sha: "merged" };
+    methods.push(body.merge_method);
+    throw Object.assign(new Error("failed"), { status: 405, apiMessage: "Merge commits are not allowed on this repository." });
   };
-  assert.deepEqual(await mergeGreenPullRequest({ github: fallback, pullNumber: 4, sha: "abc" }), { result: "merge", sha: "merged" });
-  assert.equal(method, "merge");
+  assert.deepEqual(await mergeGreenPullRequest({ github: noMergeCommits, pullNumber: 4, sha: "abc" }), { result: "blocked", sha: null });
+  assert.deepEqual(methods, ["merge"]);
   assert.deepEqual(await mergeGreenPullRequest({
     github: async (_path, verb = "GET") => {
       if (verb === "GET") return { merged: false, state: "open", head: { sha: "abc" } };

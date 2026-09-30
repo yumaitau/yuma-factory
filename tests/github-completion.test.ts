@@ -54,7 +54,7 @@ test('retry tolerates an already-removed ready label and does not close on label
   assert.equal(closed, 2);
 });
 
-test('low-risk completion squash-merges the confirmed SHA then closes; unrated never merges', async () => {
+test('low-risk completion merge-commits the confirmed SHA then closes; unrated never merges', async () => {
   const calls: string[] = [];
   const sha = 'a'.repeat(40);
   const low = { request: async (route: string, params: Record<string, unknown>) => {
@@ -69,7 +69,7 @@ test('low-risk completion squash-merges the confirmed SHA then closes; unrated n
     return { data: [] };
   } } as unknown as Client;
   assert.deepEqual(await markGithubIssueDone(low, 'org', 'repo', 7, { pullNumber: 4, sha }), ['factory:risk:low', 'factory:done']);
-  const mergeAt = calls.findIndex((call) => call.startsWith('PUT:') && call.includes('squash'));
+  const mergeAt = calls.findIndex((call) => call.startsWith('PUT:') && call.endsWith(':merge'));
   const closedAt = calls.findIndex((call) => call.startsWith('PATCH:'));
   assert.equal(mergeAt > closedAt && closedAt >= 0, true);
   const unratedCalls: string[] = [];

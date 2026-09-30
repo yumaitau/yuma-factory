@@ -196,6 +196,8 @@ export const tickets = sqliteTable(
     planTask: text("plan_task"),
     // Set when a human moves the ticket back; earlier runs stop blocking pickup.
     requeuedAt: integer("requeued_at", { mode: "timestamp" }),
+    // Rotate rejected dispatches so old unstartable tickets cannot starve new work.
+    dispatchCheckedAt: integer("dispatch_checked_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },

@@ -89,22 +89,30 @@ export async function epicContext(db: Db, ticket: Ticket) {
   };
 }
 
+/** Persist a valid proposal before finalizing its run, so interrupted callbacks can retry. */
+export async function savePlanProposal(db: Db, input: { ticket: Ticket; runId: string; raw: unknown }) {
+  const plan = parsePlan(input.raw);
+  await db.insert(plans).values({
+    id: newId('pln'), ticketId: input.ticket.id, runId: input.runId, status: 'proposed', summary: plan.summary,
+    tasksJson: JSON.stringify(plan.tasks), createdAt: new Date(),
+  }).onConflictDoNothing({ target: plans.runId });
+  const proposal = await db.select().from(plans).where(eq(plans.runId, input.runId)).get();
+  if (!proposal) throw new Error('Plan proposal could not be saved.');
+  return proposal;
+}
+
 /** Planner output lands as a proposal; projects that trust their planner apply it immediately. */
 export async function storePlan(db: Db, input: { ticket: Ticket; runId: string; raw: unknown }) {
-  const plan = parsePlan(input.raw);
-  const id = newId('pln');
-  const inserted = await db.insert(plans).values({
-    id, ticketId: input.ticket.id, runId: input.runId, status: 'proposed', summary: plan.summary,
-    tasksJson: JSON.stringify(plan.tasks), createdAt: new Date(),
-  }).onConflictDoNothing().returning({ id: plans.id });
-  if (!inserted.length) return null;
+  const proposal = await savePlanProposal(db, input);
+  if (proposal.status !== 'proposed') return proposal.id;
+  const plan = parsePlan({ summary: proposal.summary, tasks: JSON.parse(proposal.tasksJson) });
   const project = await db.select({ autoApprovePlans: projects.autoApprovePlans }).from(projects).where(eq(projects.id, input.ticket.projectId)).get();
   if (project?.autoApprovePlans) {
-    await applyPlan(db, id, null);
+    await applyPlan(db, proposal.id, null);
   } else {
     await postThreadMessage(db, { threadTicketId: input.ticket.id, kind: 'plan', body: planComment(plan, 'proposed'), runId: input.runId, author: 'Factory planner' });
   }
-  return id;
+  return proposal.id;
 }
 
 // An apply interrupted mid-way (Worker eviction, timeout) can be claimed again after this long.
@@ -119,10 +127,10 @@ export async function applyPlan(db: Db, planId: string, userId: string | null) {
     ))).returning();
   if (!claimed.length) throw new Error('Plan is not waiting for approval.');
   const row = claimed[0];
-  const epic = await db.select().from(tickets).where(eq(tickets.id, row.ticketId)).get();
-  if (!epic) throw new Error('Epic ticket not found.');
-  const plan: Plan = { summary: row.summary, tasks: parsePlan({ summary: row.summary, tasks: JSON.parse(row.tasksJson) }).tasks };
   try {
+    const epic = await db.select().from(tickets).where(eq(tickets.id, row.ticketId)).get();
+    if (!epic) throw new Error('Epic ticket not found.');
+    const plan: Plan = { summary: row.summary, tasks: parsePlan({ summary: row.summary, tasks: JSON.parse(row.tasksJson) }).tasks };
     const { client, owner, repo } = await repoClient(db, epic.projectId);
     const params = { owner, repo, request: { signal: AbortSignal.timeout(20_000) } };
     await ensureRepoLabel(client, params, LABELS.ready, '1F6FEB', 'Factory picks this ticket up automatically.');
@@ -206,7 +214,11 @@ async function issuesSince(client: Awaited<ReturnType<typeof repoClient>>['clien
 /** Plans whose apply was interrupted resume on the next automation pass. */
 export async function resumeStalePlans(db: Db) {
   const stale = await db.select({ id: plans.id }).from(plans)
-    .where(and(eq(plans.status, 'applying'), lt(plans.decidedAt, new Date(Date.now() - STALE_APPLY_MS)))).limit(5).all();
+    .innerJoin(tickets, eq(plans.ticketId, tickets.id)).innerJoin(projects, eq(tickets.projectId, projects.id))
+    .where(or(
+      and(eq(plans.status, 'applying'), lt(plans.decidedAt, new Date(Date.now() - STALE_APPLY_MS))),
+      and(eq(plans.status, 'proposed'), eq(projects.autoApprovePlans, true)),
+    )).limit(5).all();
   for (const plan of stale) await applyPlan(db, plan.id, null).catch(() => {});
 }
 

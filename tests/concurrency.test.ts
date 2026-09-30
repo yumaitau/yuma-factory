@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { forEachConcurrent, planAssignments } from '../lib/concurrency';
+import { dispatchAssignments, forEachConcurrent, planAssignments } from '../lib/concurrency';
 
 test('ten tickets get distinct workers, honour assignments and respect subscription capacity', () => {
   const agents = Array.from({ length: 10 }, (_, index) => ({ id: `agent-${index}` }));
@@ -41,4 +41,30 @@ test('invalid concurrency still drains every task instead of silently succeeding
   let none = 0;
   await forEachConcurrent([], 4, async () => { none++; });
   assert.equal(none, 0);
+});
+
+
+test('rejected tickets do not waste agent slots or starve valid work later in the same check', async () => {
+  const tickets = Array.from({ length: 8 }, (_, index) => ({ id: `ticket-${index}`, assignedAgentId: null }));
+  const agents = [{ id: 'a' }, { id: 'b' }];
+  const attempts: string[] = [], started: string[] = [];
+  const count = await dispatchAssignments(tickets, agents, 2, 2, async (ticket, agent) => {
+    attempts.push(ticket.id);
+    if (Number(ticket.id.slice(-1)) < 4) return false;
+    started.push(agent.id);
+    return true;
+  });
+  assert.equal(count, 2);
+  assert.equal(new Set(started).size, 2);
+  assert.deepEqual(attempts, ['ticket-0', 'ticket-1', 'ticket-2', 'ticket-3', 'ticket-4', 'ticket-5']);
+});
+
+test('dispatch honours assignments and attempts each rejected ticket at most once', async () => {
+  const tickets = [{ id: 'pinned', assignedAgentId: 'b' }, { id: 'other', assignedAgentId: 'missing' }, { id: 'free', assignedAgentId: null }];
+  const seen: string[] = [];
+  assert.equal(await dispatchAssignments(tickets, [{ id: 'a' }, { id: 'b' }], 2, 2, async (ticket, agent) => {
+    if (ticket.id === 'pinned') assert.equal(agent.id, 'b');
+    seen.push(ticket.id); return false;
+  }), 0);
+  assert.deepEqual(seen, ['pinned', 'free']);
 });

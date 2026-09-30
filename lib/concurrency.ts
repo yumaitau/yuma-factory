@@ -23,3 +23,26 @@ export function planAssignments<T extends { id: string; assignedAgentId: string 
   }
   return assignments;
 }
+
+
+/** Failed validation keeps the agent/slot free for the next ticket in this same check. */
+export async function dispatchAssignments<T extends { id: string; assignedAgentId: string | null }, A extends { id: string }>(
+  tickets: T[], agents: A[], capacity: number, concurrency: number,
+  dispatch: (ticket: T, agent: A) => Promise<boolean>,
+) {
+  let remaining = tickets;
+  let available = agents;
+  let started = 0;
+  while (started < capacity) {
+    const assignments = planAssignments(remaining, available, capacity - started);
+    if (!assignments.length) break;
+    const attempted = new Set(assignments.map(({ ticket }) => ticket.id));
+    remaining = remaining.filter(ticket => !attempted.has(ticket.id));
+    const busy = new Set<string>();
+    await forEachConcurrent(assignments, concurrency, async ({ ticket, agent }) => {
+      if (await dispatch(ticket, agent)) { started++; busy.add(agent.id); }
+    });
+    available = available.filter(agent => !busy.has(agent.id));
+  }
+  return started;
+}

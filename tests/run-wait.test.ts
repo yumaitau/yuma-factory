@@ -23,3 +23,8 @@ test('expired quota and missing subscriptions produce accurate recovery guidance
 test('corrupt subscription limits never throw and fall back to recovery guidance', () => {
   assert.match(runWaitReason('run', { ...ready, limitsJson: '{broken' }, now)!, /automatic recovery/);
 });
+
+
+test('a legacy run holding its own lock is executing rather than waiting on itself', () => {
+  assert.equal(runWaitReason('legacy-run', { activeRunId: 'legacy-run', leased: false, enabled: true, status: 'ready', limitsJson: null }), null);
+});

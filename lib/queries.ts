@@ -13,6 +13,7 @@ import {
 } from "@/db/schema";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/ids";
+import { moveTicket } from "@/lib/run-lifecycle";
 import { runWaitReason } from "@/lib/run-wait";
 import { runLeased } from "@/lib/codex/accounts";
 
@@ -271,16 +272,7 @@ export async function setTicketLabels(ticketId: string, labels: string[]) {
  * Only a failed or stopped latest attempt is cleared; a succeeded one must not make a second PR.
  */
 export async function setTicketStage(ticketId: string, stage: TicketStage, requeue = false) {
-  const db = await getDb();
-  const now = new Date();
-  const requeuedAt = sql`case when (select status from runs where ticket_id = ${ticketId} order by created_at desc, id desc limit 1)
-    in ('failed', 'cancelled') then ${Math.floor(now.getTime() / 1000)} else ${tickets.requeuedAt} end`;
-  const changed = await db
-    .update(tickets)
-    .set({ stage, updatedAt: now, ...(requeue ? { requeuedAt } : {}) })
-    .where(and(eq(tickets.id, ticketId), sql`not exists (select 1 from runs where ticket_id = ${ticketId} and status = 'running')`))
-    .returning({ id: tickets.id });
-  if (!changed.length) throw new Error('Stop the active run on the Work board before moving this ticket.');
+  await moveTicket(await getDb(), ticketId, stage, requeue);
 }
 
 export async function assignTicket(ticketId: string, agentId: string | null) {

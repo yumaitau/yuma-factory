@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, getTableColumns, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { accountLeases, codexAccounts } from "@/db/schema";
 import { newId } from "@/lib/ids";
 import { getDb } from "@/lib/db";
@@ -19,10 +19,19 @@ const liveLeases = (account: SQL) => sql`select 1 from account_leases l where l.
 const noLiveLease = (account: SQL) => sql`not exists (${liveLeases(account)})`;
 const accountId = sql`${codexAccounts.id}`;
 /** Select alongside a run: whether it holds a lease, i.e. is executing rather than paused. */
-export const runLeased = (runId: SQL) => sql<number>`exists (select 1 from account_leases where holder_id = ${runId})`;
+export const runLeased = (runId: SQL) => sql<number>`(exists (select 1 from account_leases where holder_id = ${runId})
+  or exists (select 1 from codex_accounts where active_run_id = ${runId}))`;
+
+/** Only short-lived maintenance locks expire; running jobs and probe locks never do. */
+export async function expireMaintenanceLocks(db: Awaited<ReturnType<typeof getDb>>, now = new Date()) {
+  await db.update(codexAccounts).set({ activeRunId: null, updatedAt: now })
+    .where(and(sql`substr(${codexAccounts.activeRunId}, 1, 12) = 'maintenance_'`,
+      lt(codexAccounts.updatedAt, new Date(now.getTime() - 15 * 60_000)), noLiveLease(accountId)));
+}
 
 export async function ownedAccount(id: string, userId: string) {
   const db = await getDb();
+  await expireMaintenanceLocks(db);
   const row = await db
     .select()
     .from(codexAccounts)
@@ -96,6 +105,7 @@ export async function availableAccounts(
   provider?: Provider | null,
 ) {
   const db = database ?? (await getDb());
+  await expireMaintenanceLocks(db);
   const rows = await db
     .select({ ...getTableColumns(codexAccounts), used: sql<number>`${occupied(accountId)}` })
     .from(codexAccounts)
@@ -183,7 +193,7 @@ export async function lockOwnedAccount(
   const db = await getDb();
   const claimed = await db
     .update(codexAccounts)
-    .set({ activeRunId: lockId })
+    .set({ activeRunId: lockId, updatedAt: new Date() })
     .where(
       and(
         eq(codexAccounts.id, id),
@@ -204,9 +214,17 @@ export async function lockOwnedAccount(
 /** Renew or resume a run's lease on its original subscription; never while maintenance holds it. */
 export async function reserveRunAccount(id: string, userId: string, runId: string, resume: boolean, database?: Awaited<ReturnType<typeof getDb>>) {
   const db = database ?? await getDb();
+  await expireMaintenanceLocks(db);
   const held = await db.select({ id: accountLeases.holderId }).from(accountLeases)
     .where(and(eq(accountLeases.accountId, id), eq(accountLeases.holderId, runId))).get();
   if (held) return true;
+  // Pre-parallel jobs hold their own maintenance lock instead of a lease.
+  // Renew that live job without treating its own lock as a competing operation.
+  const legacy = await db.select({ id: codexAccounts.id }).from(codexAccounts).where(and(
+    eq(codexAccounts.id, id), eq(codexAccounts.activeRunId, runId),
+    sql`exists (select 1 from runs r where r.id = ${runId} and r.codex_account_id = ${id} and r.requested_by_user_id = ${userId} and r.status = 'running')`,
+  )).get();
+  if (legacy) return true;
   if (!resume) return false;
   // Paused runs already count toward the subscription's slots; executing leases stay within max_runs.
   const claimed = await db.all(sql`insert into account_leases (holder_id, account_id, created_at)

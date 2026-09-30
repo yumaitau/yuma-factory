@@ -295,3 +295,19 @@ test('startup authentication errors release stopped subscription for reconnect',
   assert.equal(result.status, 'running');
   assert.equal(released, 1);
 });
+
+test('ordinary successful completion survives destruction and a failed release callback', async () => {
+  const f = fixture(1);
+  const result: RunResult = { status: 'succeeded', log: 'Completed', pullRequestUrl: 'https://github.com/owner/repo/pull/1' };
+  let destroyed = false;
+  const ops = {
+    inspect: async () => ({ running: false, result: destroyed ? null : result, progress: null }),
+    pause: async () => { if (!destroyed) { destroyed = true; throw new Error('Release callback failed'); } },
+    start: async () => assert.fail('Completed work must not restart'),
+  };
+  await assert.rejects(recoverJob(f.bucket, 'run', 'account', ops, 1000), /callback failed/);
+  assert.equal(f.job().stoppingResult?.status, 'succeeded');
+  assert.deepEqual(await recoverJob(f.bucket, 'run', 'account', ops, 2000), result);
+  assert.equal(f.job().terminalResult?.status, 'succeeded');
+  assert.deepEqual(await recoverJob(f.bucket, 'run', 'account', ops, 3000), result);
+});

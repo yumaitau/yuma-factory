@@ -90,7 +90,14 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
     if (job.retryAt && job.retryAt > now) return waiting();
     if (job.attempt) {
       const state = await ops.inspect();
-      if (state.result?.status === 'succeeded') return state.result;
+      if (state.result?.status === 'succeeded') {
+        // Keep completion evidence under the recovery lease before sandbox destruction.
+        job.stoppingResult = state.result;
+        await save();
+        await ops.pause?.(state.result);
+        job.terminalResult = state.result;
+        return state.result;
+      }
       // Running containers keep their installed scripts across deployments.
       // Enforce the same deadline for legacy supervisors using their last
       // deduplicated main-CI progress message, never unrelated coding output.

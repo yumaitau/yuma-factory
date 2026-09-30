@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { drizzle } from "drizzle-orm/d1";
 import { readFileSync, readdirSync } from "node:fs";
-import { accountBusy, availableAccounts, availableSlots, claimAccount, releaseAccount, reserveRunAccount, setAccountEnabled, setAccountMaxRuns } from "../lib/codex/accounts";
+import { accountBusy, expireMaintenanceLocks, availableAccounts, availableSlots, claimAccount, releaseAccount, reserveRunAccount, setAccountEnabled, setAccountMaxRuns } from "../lib/codex/accounts";
 import * as schema from "../db/schema";
 
 function database() {
@@ -159,4 +159,40 @@ test("agents pinned to a provider only claim that provider's subscriptions", asy
   await assert.rejects(claimAccount("a", "claude-run-2", db, "claude"), /No available Claude subscription/);
   assert.equal((await claimAccount("a", "any-run", db)).id, "codex_one");
   sqlite.close();
+});
+
+
+test('expired maintenance locks release capacity without unlocking fresh operations or running jobs', async () => {
+  const { db, sqlite, run } = database();
+  try {
+    const now = new Date();
+    const expired = new Date(now.getTime() - 16 * 60_000);
+    await db.insert(schema.codexAccounts).values([
+      account('abandoned', 'a', { activeRunId: 'maintenance_abandoned', updatedAt: expired }),
+      account('fresh', 'a', { activeRunId: 'maintenance_fresh', updatedAt: now }),
+      account('probe', 'a', { activeRunId: 'run_probe', updatedAt: expired }),
+      account('executing', 'a', { activeRunId: 'maintenance_old', updatedAt: expired }),
+    ]);
+    run('live', 'executing');
+    await db.insert(schema.accountLeases).values({ holderId: 'live', accountId: 'executing', createdAt: now });
+    await expireMaintenanceLocks(db, now);
+    assert.equal(sqlite.prepare("SELECT active_run_id FROM codex_accounts WHERE id='abandoned'").get()?.active_run_id, null);
+    for (const id of ['fresh', 'probe', 'executing']) assert.ok(sqlite.prepare('SELECT active_run_id FROM codex_accounts WHERE id=?').get(id)?.active_run_id);
+    assert.deepEqual((await availableAccounts('a', db)).map(row => row.id), ['abandoned']);
+  } finally { sqlite.close(); }
+});
+
+
+test('legacy executing runs can renew their own lock but cannot borrow another run lock', async () => {
+  const { db, sqlite, run } = database();
+  try {
+    await db.insert(schema.codexAccounts).values(account('legacy', 'a', { activeRunId: 'old-run' }));
+    run('old-run', 'legacy');
+    assert.equal(await reserveRunAccount('legacy', 'a', 'old-run', false, db), true);
+    assert.equal(await reserveRunAccount('legacy', 'b', 'old-run', true, db), false);
+    assert.equal(await reserveRunAccount('legacy', 'a', 'other-run', true, db), false);
+    assert.equal(sqlite.prepare("SELECT active_run_id FROM codex_accounts WHERE id='legacy'").get()?.active_run_id, 'old-run');
+    sqlite.exec("UPDATE runs SET status='succeeded' WHERE id='old-run'");
+    assert.equal(await reserveRunAccount('legacy', 'a', 'old-run', true, db), false);
+  } finally { sqlite.close(); }
 });

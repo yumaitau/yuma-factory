@@ -8,7 +8,7 @@ import { newId } from '@/lib/ids';
 import { startCodexRun, refreshRuns } from '@/lib/agent/run';
 import { AUTOMATION_ID, automationCandidates, claimAutomation, ensureAutomationAgents } from '@/lib/automation-state';
 import { availableSlots } from '@/lib/codex/accounts';
-import { forEachConcurrent, planAssignments } from '@/lib/concurrency';
+import { dispatchAssignments, forEachConcurrent } from '@/lib/concurrency';
 import { planLinkForBody, reconcileEpics, resumeStalePlans } from '@/lib/collab-store';
 import { LABELS } from '@/lib/brand';
 import { approvalHistory, staleApproval } from '@/lib/approval';
@@ -127,16 +127,16 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
         eq(agents.status, 'idle'), sql`${agents.automationSlot} between 1 and ${settings.targetAgents}`)).all();
       const candidates = await automationCandidates(db, pool.map((agent) => agent.id), settings.label);
       const capacity = await availableSlots(settings.userId, db);
-      const assignments = planAssignments(candidates.map((row) => row.ticket), idle, capacity);
       const dispatchErrors: string[] = [];
       await db.update(automation).set({ reposSynced, issuesSynced, updatedAt: new Date(),
-        summary: `Dispatching ${assignments.length} tickets to available agents.` }).where(held());
-      await forEachConcurrent(assignments, 4, async ({ ticket, agent }) => {
-          if (Date.now() > deadline || !(await stillEnabled())) return;
+        summary: `Checking up to ${candidates.length} tickets for available agents.` }).where(held());
+      await dispatchAssignments(candidates.map((row) => row.ticket), idle, capacity, 4, async (ticket, agent) => {
+          if (Date.now() > deadline || !(await stillEnabled())) return false;
           const project = candidates.find((candidate) => candidate.ticket.id === ticket.id)!.project;
           const installation = boards.find((board) => board.project.id === project.id)?.installation;
-          if (!installation) return;
+          if (!installation) return false;
           try {
+            await db.update(tickets).set({ dispatchCheckedAt: new Date() }).where(eq(tickets.id, ticket.id));
             // Re-check GitHub immediately before dispatch, including closed or unlabelled tickets.
             const client = await clientFor(installation.installationId);
             const [owner, repo] = project.repoFullName.split('/');
@@ -145,16 +145,18 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
             const labels = data.labels.map((label) => typeof label === 'string' ? label : label.name).filter(Boolean);
             await db.update(tickets).set({ githubState: data.state, labels: JSON.stringify(labels),
               title: data.title, body: data.body ?? null, updatedAt: new Date() }).where(eq(tickets.id, ticket.id));
-            if (data.state !== 'open' || data.pull_request || !labels.some((label) => [settings.label.toLowerCase(), LABELS.plan].includes(label?.toLowerCase() ?? ''))) return;
+            if (data.state !== 'open' || data.pull_request || !labels.some((label) => [settings.label.toLowerCase(), LABELS.plan].includes(label?.toLowerCase() ?? ''))) return false;
             // Fail closed: text changed by anyone but the approver needs a fresh label.
             const stale = staleApproval(await approvalHistory(client.graphql, owner, repo, ticket.githubIssueNumber), [settings.label, LABELS.plan]);
             if (stale) throw new Error(`${project.repoFullName}#${ticket.githubIssueNumber}: ${stale}`);
             await startCodexRun(ticket.id, agent.id, agent.modelId ?? 'codex-default', settings.userId,
               { automationLabel: settings.label, automationLeaseId: leaseId });
             runsStarted++;
-            await db.update(automation).set({ runsStarted: sql`${automation.runsStarted} + 1`, updatedAt: new Date() }).where(held());
+            await db.update(automation).set({ runsStarted: sql`${automation.runsStarted} + 1`, updatedAt: new Date() }).where(held()).catch(() => {});
+            return true;
           } catch (error) {
             dispatchErrors.push(error instanceof Error ? error.message : 'Could not start the next ticket.');
+            return false;
           }
       });
       summary = runsStarted ? `Started ${runsStarted} parallel run${runsStarted === 1 ? '' : 's'}. Remaining tickets wait for free agents and subscriptions.`

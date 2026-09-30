@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { accountLeases, agents, codexAccounts, runs, tickets } from "@/db/schema";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/ids";
@@ -8,18 +8,17 @@ import { markGithubIssueDone } from '@/lib/github-completion';
 import { LABELS } from '@/lib/brand';
 import { parsePullRef } from '@/lib/work-review';
 import {
-  finishRun,
   getTicketWithContext,
-  setAgentStatus,
-  setTicketStage,
 } from "@/lib/queries";
 import { claimAccount, releaseAccount, saveStatus } from "@/lib/codex/accounts";
 import { runnerRequest } from "@/lib/codex/runner";
 import { completionStage, hasGreenCICompletion, isProvider, validModel, type RunResult } from "@/shared/codex";
 import { forEachConcurrent } from '@/lib/concurrency';
 import { applyRunOutcome, captureLearnings, memoriesForTicket, recordRunMemories } from '@/lib/memory-store';
-import { epicContext, isPlanTicket, postThreadMessage, storePlan } from '@/lib/collab-store';
+import { epicContext, isPlanTicket, postThreadMessage, savePlanProposal, storePlan } from '@/lib/collab-store';
 import { buildRunPrompt } from '@/lib/run-prompt';
+import { claimRun, reconcileAbandonedClaims } from '@/lib/run-lifecycle';
+import { parsePlan } from '@/lib/plan';
 
 export async function startCodexRun(
   ticketId: string,
@@ -54,57 +53,10 @@ export async function startCodexRun(
   // A pinned provider keeps a provider-specific model off the other CLI.
   const account = await claimAccount(userId, runId, db, isProvider(agent.provider) ? agent.provider : null);
   let inserted = false;
-  let claimedTicket = false;
-  let claimedAgent = false;
   let dispatched = false;
   try {
-    const availableAgent = await db
-      .update(agents)
-      .set({ status: "working", updatedAt: new Date() })
-      .where(and(eq(agents.id, agentId), eq(agents.status, "idle")))
-      .returning({ id: agents.id });
-    if (!availableAgent.length)
-      throw new Error("This agent is already working or disabled.");
-    claimedAgent = true;
-    // Compare-and-set prevents two requests starting the same ticket.
-    const claimed = await db
-      .update(tickets)
-      .set({
-        stage: "in_progress",
-        assignedAgentId: agentId,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(tickets.id, ticketId),
-          eq(tickets.githubState, 'open'),
-          inArray(tickets.stage, ["intake", "assigned", "review"]),
-          ...(options ? [
-            inArray(tickets.stage, ['intake', 'assigned']),
-            sql`(${tickets.assignedAgentId} is null or ${tickets.assignedAgentId} = ${agentId})`,
-            sql`not exists (select 1 from runs where ticket_id = ${ticketId} and (${tickets.requeuedAt} is null or created_at >= ${tickets.requeuedAt}))`,
-            sql`exists (select 1 from json_each(case when json_valid(${tickets.labels}) then ${tickets.labels} else '[]' end) where lower(value) in (lower(${options.automationLabel}), ${LABELS.plan}))`,
-            sql`not exists (select 1 from ticket_dependencies d join tickets blocker on blocker.id = d.depends_on_ticket_id where d.ticket_id = ${ticketId} and blocker.github_state = 'open')`,
-            sql`exists (select 1 from automation a join agents worker on worker.id = ${agentId} where a.id = 'github' and a.enabled = 1 and a.user_id = ${userId} and a.lease_id = ${options.automationLeaseId} and worker.owner_user_id = a.user_id and worker.automation_slot between 1 and a.target_agents)`,
-          ] : []),
-        ),
-      )
-      .returning({ id: tickets.id });
-    if (!claimed.length)
-      throw new Error("Ticket already running or completed.");
-    claimedTicket = true;
-    await db.insert(runs).values({
-      id: runId,
-      ticketId,
-      agentId,
-      requestedByUserId: userId,
-      codexAccountId: account.id,
-      status: "running",
-      modelId,
-      mode,
-      startedAt: new Date(),
-      createdAt: new Date(),
-    });
+    if (!await claimRun(db, { id: runId, ticketId, agentId, userId, accountId: account.id, modelId, mode }, options))
+      throw new Error('Ticket or agent is already busy, completed, blocked or unavailable.');
     inserted = true;
     // Usage tracking is advisory; it must never block a run from starting.
     await recordRunMemories(db, runId, memory.selected.map((item) => item.id)).catch(() => {});
@@ -132,15 +84,6 @@ export async function startCodexRun(
         .where(eq(runs.id, runId));
       return runId;
     }
-    if (inserted) {
-      await finishRun({
-        runId,
-        status: "failed",
-        log: error instanceof Error ? error.message : "Could not start Codex.",
-      });
-    }
-    if (claimedAgent) await setAgentStatus(agentId, "idle");
-    if (claimedTicket) await setTicketStage(ticketId, "assigned");
     await releaseAccount(account.id, runId);
     throw error;
   }
@@ -149,6 +92,7 @@ export async function startCodexRun(
 /** Poll durable sandbox jobs; no coding work depends on a request's waitUntil lifetime. */
 export async function refreshRuns(userId: string, timeoutMs = 120_000) {
   const db = await getDb();
+  await reconcileAbandonedClaims(db);
   const active = await db
     .select()
     .from(runs)
@@ -216,9 +160,23 @@ export async function completeCodexRun(runId: string, result: RunResult) {
   }
   const active = sql`exists (select 1 from runs where id = ${runId} and status = 'running')`;
   if (run.status !== 'running') return;
+  if (run.mode === 'plan' && result.status === 'succeeded') {
+    try {
+      parsePlan(result.plan);
+    } catch (error) {
+      result = { ...result, status: 'failed', retryable: false,
+        log: `${result.log}\nPlanner returned an invalid proposal: ${error instanceof Error ? error.message : 'unknown error'}. Move the ticket to intake to retry.` };
+    }
+    if (result.status === 'succeeded') {
+      const context = await getTicketWithContext(run.ticketId);
+      if (!context) throw new Error('Plan ticket is unavailable.');
+      // A database failure keeps the run running, so callback/polling can retry this mandatory step.
+      await savePlanProposal(db, { ticket: context.ticket, runId, raw: result.plan });
+    }
+  }
   let completedLabels: string[] | undefined;
   let completionNote: string | undefined;
-  const ciComplete = hasGreenCICompletion(result);
+  const ciComplete = run.mode !== 'plan' && hasGreenCICompletion(result);
   if (ciComplete) {
     await db.update(runs).set({ log: `CI green; updating GitHub issue, merging low-risk PRs, and applying ${LABELS.done}.`,
       pullRequestUrl: result.pullRequestUrl ?? null }).where(and(eq(runs.id, runId), eq(runs.status, 'running')));

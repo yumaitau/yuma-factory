@@ -7,6 +7,7 @@ import { newId } from '@/lib/ids';
 import { runWaitReason } from '@/lib/run-wait';
 import { availableAccounts, runLeased } from '@/lib/codex/accounts';
 import { LABELS } from '@/lib/brand';
+import { planReady } from '@/lib/run-lifecycle';
 
 export const AUTOMATION_ID = 'github';
 
@@ -48,7 +49,7 @@ export async function automationCandidates(db: Db, agentId: string | string[], l
   return db.select({ ticket: tickets, project: projects }).from(tickets)
     .innerJoin(projects, eq(tickets.projectId, projects.id))
     .where(and(
-      eq(projects.status, 'active'), eq(tickets.githubState, 'open'),
+      eq(projects.status, 'active'), eq(tickets.githubState, 'open'), planReady(),
       or(eq(tickets.stage, 'intake'), eq(tickets.stage, 'assigned')),
       or(isNull(tickets.assignedAgentId), agentIds.length ? inArray(tickets.assignedAgentId, agentIds) : sql`0`),
       // Pickup label implements; plan label asks the planner to carve the ticket into subtasks.
@@ -58,7 +59,7 @@ export async function automationCandidates(db: Db, agentId: string | string[], l
       // A failed attempt needs human review; a successful attempt must not make a second PR.
       // A human requeue clears earlier attempts.
       sql`not exists (select 1 from ${runs} where ${runs.ticketId} = ${tickets.id} and (${tickets.requeuedAt} is null or ${runs.createdAt} >= ${tickets.requeuedAt}))`,
-    )).orderBy(asc(tickets.createdAt), asc(tickets.id)).limit(limit).all();
+    )).orderBy(asc(tickets.dispatchCheckedAt), asc(tickets.createdAt), asc(tickets.id)).limit(limit).all();
 }
 
 export async function automationStatus() {

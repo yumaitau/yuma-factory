@@ -23,7 +23,7 @@ export function parseLimits(limitsJson: string | null): AccountStatus['limits'] 
 
 /** A released subscription is waiting for recovery, not executing this run. */
 export function runWaitReason(runId: string, account: Subscription | null, now = Date.now()): string | null {
-  if (account?.leased) return null;
+  if (account?.leased || account?.activeRunId === runId) return null;
   if (!account) return 'Subscription unavailable. Reconnect it to resume this run.';
   if (!account.enabled) return 'Subscription disabled. Enable it to resume this run.';
   if (account.activeRunId) return 'Waiting for the subscription to finish its other operation.';

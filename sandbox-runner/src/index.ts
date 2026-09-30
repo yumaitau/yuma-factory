@@ -214,11 +214,8 @@ async function recover(env: Env, id: string, accountId: string, cancel = false) 
     },
   }, Date.now(), cancel);
   if (result.status !== 'running') {
-    if (result.status === 'succeeded') {
-      await persist(env, accountId, sb, true).catch(() => {});
-    }
+    // recoverJob persisted the result before destroying and releasing the sandbox.
     await env.CODEX_VAULT.put(`results/${id}`, JSON.stringify({ accountId, result }));
-    if (result.status === 'succeeded') await sb.destroy();
   }
   return Response.json(result);
 }

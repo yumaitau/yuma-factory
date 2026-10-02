@@ -12,6 +12,7 @@ import { dispatchAssignments, forEachConcurrent } from '@/lib/concurrency';
 import { planLinkForBody, reconcileEpics, resumeStalePlans } from '@/lib/collab-store';
 import { LABELS } from '@/lib/brand';
 import { approvalHistory, staleApproval } from '@/lib/approval';
+import { syncPullRequests } from '@/lib/pull-request-sync';
 
 /** One durable lease covers cron and manual checks. Interrupted checks can resume after expiry. */
 export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' = 'pickup') {
@@ -120,6 +121,7 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
     });
 
     if (await stillEnabled()) {
+      if (mode === 'sync') await syncPullRequests(db, clientFor, syncDeadline + 60_000).catch(() => {});
       await resumeStalePlans(db).catch(() => {});
       await reconcileEpics(db).catch(() => {});
       // Refresh agent state after reconciliation; never reuse the pre-check snapshot.

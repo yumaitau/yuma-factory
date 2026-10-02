@@ -38,7 +38,7 @@ export async function claimRun(db: Db, input: {
   const [claimed] = await db.batch([
     db.insert(runs).select(sql`select
       ${id}, ${ticketId}, ${agentId}, 'running', null, ${accountId}, ${userId},
-      ${modelId}, ${mode}, '', null, null, 0, 0, ${createdAt}, null, ${createdAt}
+      ${modelId}, ${mode}, '', null, null, null, null, 0, 0, ${createdAt}, null, ${createdAt}
       from ${tickets} where ${eligible}`).returning({ id: runs.id }),
     db.update(agents).set({ status: 'working', updatedAt: new Date() }).where(and(eq(agents.id, agentId), ownsRun)),
     db.update(tickets).set({ stage: 'in_progress', assignedAgentId: agentId, updatedAt: new Date() })

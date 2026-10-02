@@ -34,7 +34,9 @@ export async function workBoardCards(): Promise<WorkCard[]> {
   const blocker = alias(tickets, 'blocker');
   const blocks = await db.select({ ticketId: ticketDependencies.ticketId, number: blocker.githubIssueNumber }).from(ticketDependencies)
     .innerJoin(blocker, eq(ticketDependencies.dependsOnTicketId, blocker.id)).where(eq(blocker.githubState, 'open')).all();
-  return rows.map(({ ticket, repo, agent, run: latest, account, leased }) => {
+  // A PR closed without merging ends that attempt; the ticket leaves the board until requeued.
+  return rows.filter(({ ticket, run }) => !(run?.pullRequestState === 'closed' && !(ticket.requeuedAt && ticket.requeuedAt > run.createdAt)))
+    .map(({ ticket, repo, agent, run: latest, account, leased }) => {
     // Runs from before a human requeue no longer decide the ticket's lane.
     const run = latest && !(ticket.requeuedAt && ticket.requeuedAt > latest.createdAt) ? latest : null;
     return {

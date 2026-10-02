@@ -234,6 +234,9 @@ export const runs = sqliteTable(
     log: text("log").notNull().default(""),
     logKeyR2: text("log_key_r2"),
     pullRequestUrl: text("pull_request_url"),
+    // Last seen GitHub state of pullRequestUrl: open|merged|closed. Closed PRs leave the Work board.
+    pullRequestState: text("pull_request_state"),
+    pullRequestCheckedAt: integer("pull_request_checked_at", { mode: "timestamp" }),
     // Usage reported by the Codex run.
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),

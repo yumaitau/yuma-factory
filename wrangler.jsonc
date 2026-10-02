@@ -10,7 +10,9 @@
   },
   "secrets": { "required": ["SANDBOX_RUNNER_SECRET"] },
   "compatibility_date": "2026-09-09",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // Next's Cache Components share pending-import promises across concurrent requests.
+  // Without this flag, workerd cancels those continuations once the first request ends, and the rest hang.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public", "no_handle_cross_request_promise_resolution"],
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS",

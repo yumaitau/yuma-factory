@@ -273,6 +273,38 @@ test("a PR with no CI is left for review after 30 minutes and never closes the i
   assert.match(messages.at(-1), /No CI registered on the PR/);
 });
 
+test("a repository without any CI finishes a low-risk PR after the grace period", async () => {
+  let time = 0;
+  const calls = [];
+  const result = await finishWithGreenCI({
+    snapshot: async () => ({ ...evaluateCI([], [], []), noCI: true, sha: "head" }),
+    repair: async () => assert.fail("No CI is not a code failure"),
+    closeIssue: async () => assert.fail("Only green CI uses closeIssue"),
+    closeWithoutCI: async (sha) => { calls.push([sha, time]); return true; },
+    progress: async () => {},
+    wait: async () => { time += 60_000; },
+    now: () => time,
+  });
+  assert.equal(result, "head");
+  assert.deepEqual(calls, [["head", 5 * 60_000]]);
+});
+
+test("a repository without any CI keeps a declined PR for review", async () => {
+  let time = 0;
+  let calls = 0;
+  const result = await finishWithGreenCI({
+    snapshot: async () => ({ ...evaluateCI([], [], []), noCI: true, sha: "head" }),
+    repair: async () => assert.fail("No CI is not a code failure"),
+    closeIssue: async () => assert.fail("Unverified work must not close the issue"),
+    closeWithoutCI: async () => { calls++; return false; },
+    progress: async () => {},
+    wait: async () => { time += 5 * 60_000; },
+    now: () => time,
+  });
+  assert.equal(result, null);
+  assert.equal(calls, 1);
+});
+
 test("CI that registers late on the PR resets the no-CI clock", async () => {
   let time = 0;
   let closed = 0;

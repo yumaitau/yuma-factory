@@ -707,14 +707,17 @@ async function run() {
           if (current.head.sha !== publishedHead)
             throw new Error("PR head changed outside this run. Ticket left open to preserve those changes.");
           const required = await loadRequiredChecks(github, pages, current.base.ref);
-          const [checks, statuses, runs] = await Promise.all([
+          const [checks, statuses, runs, repoWorkflows] = await Promise.all([
             pages(`/commits/${publishedHead}/check-runs?filter=latest`, "check_runs"),
             pages(`/commits/${publishedHead}/status`, "statuses"),
             pages(`/actions/runs?head_sha=${publishedHead}`, "workflow_runs"),
+            github("/actions/workflows?per_page=1"),
           ]);
           const workflows = latestWorkflows(runs);
           return {
             ...evaluateCI(checks, statuses, workflows, required),
+            // Nothing in the repository can ever report CI: no workflow files and no required checks.
+            noCI: repoWorkflows.total_count === 0 && !required.length,
             sha: current.head.sha,
             closed: current.state !== "open",
             // Review approvals gate merging, not CI completion of the ticket.
@@ -767,6 +770,22 @@ async function run() {
             }
             await progress("Low risk. PR merged after green CI. Waiting for the main pipeline.");
             await watchMain(merged.sha);
+          },
+          // No CI exists to wait for. Low risk merges and closes; anything else stays for review.
+          closeWithoutCI: async (sha) => {
+            const issue = await github(`/issues/${req.issueNumber}`);
+            if (!isLowRisk(labelNames(issue.labels), req.labelPrefix)) {
+              await progress("No CI in this repository. Not low risk, so the PR is left for review.");
+              return false;
+            }
+            const merged = await mergeGreenPullRequest({ github, pullNumber: pull.number, sha });
+            if (merged.result === "blocked") {
+              await progress("No CI in this repository. Low-risk merge blocked by GitHub. PR left open for review.");
+              return false;
+            }
+            await closeGitHubIssue();
+            await progress("No CI in this repository. Low risk, so the PR was merged and the GitHub issue closed.");
+            return true;
           },
         });
       }

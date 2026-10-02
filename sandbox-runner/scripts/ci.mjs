@@ -125,6 +125,8 @@ export async function mergeGreenPullRequest({ github, pullNumber, sha }) {
 }
 
 export const NO_PR_CI_MS = 30 * 60_000;
+// A repository with no workflows and no required checks can only get CI from an external app.
+export const NO_CI_REPO_MS = 5 * 60_000;
 export const NO_MAIN_CI_MS = 10 * 60_000;
 // Repairs in a row that change nothing before the PR is left for a human.
 export const MAX_IDLE_REPAIRS = 3;
@@ -140,15 +142,23 @@ export function isAccountBlockedCI(diagnostics) {
  * Repairs that push changes are unlimited; every repair must pass CI on its new head
  * before closure. MAX_IDLE_REPAIRS in a row that change nothing stop the run.
  * Returns null when no CI ever registers on the PR: it is left for human review.
+ * In a repository without any CI (`noCI`), closeWithoutCI() may finish the ticket instead;
+ * it returns false to keep the PR for review.
  */
-export async function finishWithGreenCI({ snapshot, repair, closeIssue, progress, wait, now = Date.now }) {
+export async function finishWithGreenCI({ snapshot, repair, closeIssue, closeWithoutCI, progress, wait, now = Date.now }) {
   let greenHead = null;
   let emptySince = null;
   let idleRepairs = 0;
+  let keepForReview = false;
   for (;;) {
     const current = await snapshot();
     if (current.empty) {
       emptySince ??= now();
+      if (current.noCI && closeWithoutCI && !keepForReview && !current.blocked && !current.closed &&
+        now() - emptySince >= NO_CI_REPO_MS) {
+        if (await closeWithoutCI(current.sha)) return current.sha;
+        keepForReview = true;
+      }
       if (now() - emptySince >= NO_PR_CI_MS) {
         await progress("No CI registered on the PR within 30 minutes. Only review bots, if any, reported. PR left open for review; subscription released.");
         return null;

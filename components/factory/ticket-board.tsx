@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -49,7 +49,13 @@ export function TicketBoard({
   agents: BoardAgent[];
   defaultModelId: string;
 }) {
-  const [pending, startTransition] = useTransition();
+  // Per-ticket, so one slow action never locks every other ticket's controls.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  const track = async (ticketId: string, work: () => Promise<void>) => {
+    setBusy((ids) => new Set(ids).add(ticketId));
+    try { await work(); }
+    finally { setBusy((ids) => { const next = new Set(ids); next.delete(ticketId); return next; }); }
+  };
   const router = useRouter();
   const [error, setError] = useState("");
   const [runRows, setRunRows] = useState<
@@ -141,9 +147,9 @@ export function TicketBoard({
                           aria-label="Risk rating"
                           className="min-w-0 w-full max-w-full rounded-md border border-border bg-background px-2 py-1 text-xs"
                           value={factoryRisk(ticket.labels, LABEL_PREFIX) ?? risk ?? ""}
-                          disabled={pending}
+                          disabled={busy.has(ticket.id)}
                           onChange={(e) =>
-                            startTransition(async () => {
+                            track(ticket.id, async () => {
                               setError("");
                               try {
                                 await setTicketRiskAction(ticket.id, e.target.value || null);
@@ -165,9 +171,9 @@ export function TicketBoard({
                           aria-label="Assign agent"
                           className="min-w-0 w-full max-w-full rounded-md border border-border bg-background px-2 py-1 text-xs"
                           value={ticket.assignedAgentId ?? ""}
-                          disabled={pending}
+                          disabled={busy.has(ticket.id)}
                           onChange={(e) =>
-                            startTransition(async () => {
+                            track(ticket.id, async () => {
                               setError('');
                               try {
                                 const result = await assignTicketAction(ticket.id, e.target.value || null);
@@ -189,9 +195,9 @@ export function TicketBoard({
                           aria-label="Move stage"
                           className="min-w-0 w-full max-w-full rounded-md border border-border bg-background px-2 py-1 text-xs"
                           value={ticket.stage}
-                          disabled={pending}
+                          disabled={busy.has(ticket.id)}
                           onChange={(e) =>
-                            startTransition(async () => {
+                            track(ticket.id, async () => {
                               setError('');
                               try {
                                 const result = await moveTicketAction(ticket.id, e.target.value);
@@ -213,9 +219,9 @@ export function TicketBoard({
                         stage.id !== "done" ? (
                           <Button
                             size="sm"
-                            disabled={pending}
+                            disabled={busy.has(ticket.id)}
                             onClick={() =>
-                              startTransition(async () => {
+                              track(ticket.id, async () => {
                                 setError("");
                                 try {
                                   const result = await startRunAction(

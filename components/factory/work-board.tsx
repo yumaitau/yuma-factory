@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useState } from 'react';
 import { cancelRunAction, moveTicketAction } from '@/app/actions/factory';
 import { useRouter } from 'next/navigation';
 import { workLane, workReason, type WorkCard } from '@/lib/work-board';
@@ -25,8 +25,19 @@ export function WorkBoard({ cards, refreshedAt }: { cards: WorkCard[]; refreshed
   const [repo, setRepo] = useState('');
   const [all, setAll] = useState(false);
   const [now, setNow] = useState(Date.parse(refreshedAt));
-  const [pending, startTransition] = useTransition();
+  // Per-card, so one slow action never locks every other card's buttons.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState('');
+  // The action's revalidatePath already returns the refreshed board; no extra router.refresh().
+  async function act(cardId: string, action: () => Promise<{ error?: string }>, failure: string) {
+    setError('');
+    setBusy((ids) => new Set(ids).add(cardId));
+    try {
+      const result = await action();
+      if (result.error) setError(result.error);
+    } catch { setError(failure); }
+    finally { setBusy((ids) => { const next = new Set(ids); next.delete(cardId); return next; }); }
+  }
   useEffect(() => {
     const timer = setInterval(() => { setNow(Date.now()); if (document.visibilityState === 'visible') router.refresh(); }, 10_000);
     return () => clearInterval(timer);
@@ -62,29 +73,15 @@ export function WorkBoard({ cards, refreshedAt }: { cards: WorkCard[]; refreshed
             <p className="mt-2 text-xs text-muted-foreground">{workReason(card)}</p>
             {id === 'waiting' && card.runId && <div className="mt-3 space-y-2 text-xs">
               <Link href="/pool" className="block underline">Manage subscriptions</Link>
-              <button type="button" disabled={pending} className="rounded border px-2 py-1 font-medium disabled:opacity-50" onClick={() => {
-                setError('');
-                startTransition(async () => {
-                  try {
-                    const result = await cancelRunAction(card.runId!);
-                    if (result.error) setError(result.error);
-                    else router.refresh();
-                  } catch { setError('Could not stop this run. Try again.'); }
-                });
-              }}>{pending ? 'Stopping…' : 'Stop and return to intake'}</button>
+              <button type="button" disabled={busy.has(card.id)} className="rounded border px-2 py-1 font-medium disabled:opacity-50"
+                onClick={() => act(card.id, () => cancelRunAction(card.runId!), 'Could not stop this run. Try again.')}>
+                {busy.has(card.id) ? 'Stopping…' : 'Stop and return to intake'}</button>
               <p className="text-muted-foreground">Stops retries. Keeps the existing branch and PR.</p>
             </div>}
             {(id === 'attention' || card.runStatus === 'cancelled') && <div className="mt-3 space-y-2 text-xs">
-              <button type="button" disabled={pending} className="rounded border px-2 py-1 font-medium disabled:opacity-50" onClick={() => {
-                setError('');
-                startTransition(async () => {
-                  try {
-                    const result = await moveTicketAction(card.id, 'intake');
-                    if (result.error) setError(result.error);
-                    else router.refresh();
-                  } catch { setError('Could not move this ticket. Try again.'); }
-                });
-              }}>{pending ? 'Moving…' : 'Move to Needs preparation'}</button>
+              <button type="button" disabled={busy.has(card.id)} className="rounded border px-2 py-1 font-medium disabled:opacity-50"
+                onClick={() => act(card.id, () => moveTicketAction(card.id, 'intake'), 'Could not move this ticket. Try again.')}>
+                {busy.has(card.id) ? 'Moving…' : 'Move to Needs preparation'}</button>
               <p className="text-muted-foreground">Clears the previous attempt. Factory picks it up again while it has {LABELS.ready}.</p>
             </div>}
             {riskCopy(card.labels) && <p className="mt-2 text-xs font-medium">{riskCopy(card.labels)}</p>}

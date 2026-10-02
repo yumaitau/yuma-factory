@@ -47,6 +47,20 @@ export async function beforeStop<T>(operation: () => Promise<T>): Promise<T | un
   }
 }
 
+// A wedged container never answers; without a bound, every check holds the lease and the run never moves.
+export const INSPECT_TIMEOUT_MS = 60_000;
+async function inspectWithin(ops: Operations, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | number | undefined;
+  try {
+    return await Promise.race([
+      ops.inspect(),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /** R2 conditional writes serialize cron/UI polls, including after Worker restarts. */
 export async function recoverJob(bucket: R2Bucket, id: string, accountId: string, ops: Operations, now = Date.now(), cancel = false): Promise<RunResult> {
   const key = `jobs/${id}`;
@@ -91,7 +105,10 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
     if (!job.request) throw new Error('Legacy run has no durable recovery request.');
     if (job.retryAt && job.retryAt > now) return waiting();
     if (job.attempt) {
-      const state = await ops.inspect();
+      const state = await inspectWithin(ops, INSPECT_TIMEOUT_MS) ?? {
+        running: false, progress: null,
+        result: { ...job.progress, status: 'failed' as const, log: `${job.progress?.log ?? ''}\nRunner sandbox stopped responding. Restarting on a fresh runner.` },
+      };
       if (state.result?.status === 'succeeded') {
         // Keep completion evidence under the recovery lease before sandbox destruction.
         job.stoppingResult = state.result;

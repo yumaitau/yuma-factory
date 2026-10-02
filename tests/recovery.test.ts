@@ -336,3 +336,22 @@ test('a coding run silent past Codex\'s time limit restarts; a silent CI wait do
   }, after);
   assert.equal(waiting.job().retryAt, undefined);
 });
+
+test('an unresponsive sandbox is treated as interrupted instead of holding the lease forever', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(1);
+  f.job().progress = { status: 'running', log: 'Coding' };
+  let paused = 0;
+  const result = recoverJob(f.bucket, 'run', 'account', {
+    inspect: () => new Promise(() => {}),
+    pause: async () => { paused++; },
+    start: async () => assert.fail('Restart waits for the backoff'),
+  }, 1000);
+  await new Promise(setImmediate);
+  t.mock.timers.tick(60_000);
+  assert.equal((await result).status, 'running');
+  assert.equal(paused, 1);
+  assert.ok(f.job().retryAt);
+  assert.equal(f.job().leaseUntil, undefined);
+  assert.match(f.job().progress?.log ?? '', /stopped responding/);
+});

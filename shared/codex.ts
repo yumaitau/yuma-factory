@@ -76,10 +76,24 @@ export function validateAuthFile(raw: string): string {
     last_refresh: value.last_refresh,
   });
 }
-/** Agent CLIs a subscription can drive. */
-export const PROVIDERS = ["codex", "claude"] as const;
+/** Agent CLIs a subscription can drive. Workers AI runs Codex against Cloudflare-hosted models. */
+export const PROVIDERS = ["codex", "claude", "workersai"] as const;
 export type Provider = (typeof PROVIDERS)[number];
-export const PROVIDER_NAMES: Record<Provider, string> = { codex: "Codex", claude: "Claude" };
+export const PROVIDER_NAMES: Record<Provider, string> = { codex: "Codex", claude: "Claude", workersai: "Workers AI" };
+/** Affordable Workers AI model that still handles agentic coding and tool calls well. */
+export const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-5.3-flash";
+export function validWorkersAiModel(model: string) {
+  return /^@cf\/[a-z0-9._-]{1,60}\/[a-z0-9._-]{1,80}$/.test(model);
+}
+/** Workers AI needs no per-account secret; the runner holds one scoped Cloudflare token. */
+export const WORKERS_AI_LOGIN = JSON.stringify({ auth_mode: "workers_ai" });
+export function isWorkersAiLogin(raw: string) {
+  try {
+    return JSON.parse(raw).auth_mode === "workers_ai";
+  } catch {
+    return false;
+  }
+}
 export function isProvider(value: unknown): value is Provider {
   return PROVIDERS.includes(value as Provider);
 }
@@ -101,6 +115,7 @@ export function isClaudeLogin(raw: string) {
 }
 /** Validate either stored login kind before it enters the vault. */
 export function validateStoredLogin(raw: string): string {
+  if (isWorkersAiLogin(raw)) return WORKERS_AI_LOGIN;
   return isClaudeLogin(raw)
     ? validateClaudeToken(String(JSON.parse(raw).token ?? ""))
     : validateAuthFile(raw);

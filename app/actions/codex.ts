@@ -19,6 +19,7 @@ import {
 import { runnerRequest } from "@/lib/codex/runner";
 import {
   isProvider,
+  MAX_PARALLEL_RUNS,
   validateAuthFile,
   validateClaudeToken,
   validId,
@@ -33,7 +34,7 @@ export async function connectCodexAction(form: FormData) {
     if (!label || label.length > 80)
       throw new Error("Enter a subscription name (up to 80 characters).");
     const provider = form.get("provider") ?? "codex";
-    if (!isProvider(provider)) throw new Error("Choose Codex or Claude.");
+    if (!isProvider(provider)) throw new Error("Choose Codex, Claude or Workers AI.");
     const file = form.get("authFile");
     const auth =
       provider === "codex" && file instanceof File && file.size
@@ -54,6 +55,8 @@ export async function connectCodexAction(form: FormData) {
         shared: form.get("shared") === "on",
         enabled: form.get("enabled") === "on",
         status: "connecting",
+        // Workers AI has no subscription limits; its parallelism is only bounded by agents.
+        ...(provider === "workersai" ? { maxRuns: MAX_PARALLEL_RUNS } : {}),
         createdAt: now,
         updatedAt: now,
       });
@@ -61,7 +64,7 @@ export async function connectCodexAction(form: FormData) {
       const status = await runnerRequest<AccountStatus>(
         `/accounts/${id}/connect`,
         "POST",
-        { auth, token },
+        provider === "workersai" ? { workersAi: true } : { auth, token },
       );
       await saveStatus(id, status);
       revalidatePath("/pool");
@@ -159,7 +162,7 @@ export async function reconnectCodexAction(id: string, newToken?: string) {
       const status = await runnerRequest<AccountStatus>(
         `/accounts/${id}/connect`,
         "POST",
-        { token },
+        account.provider === "workersai" ? { workersAi: true } : { token },
       );
       const db = await getDb();
       await db

@@ -5,6 +5,8 @@
     "LABEL_PREFIX": "yuma",
     "COMMIT_AUTHOR_NAME": "Yuma Factory",
     "COMMIT_AUTHOR_EMAIL": "factory@yumait.au",
+    // Workers AI runs bill to this account; WORKERS_AI_TOKEN is a secret limited to Workers AI.
+    "WORKERS_AI_ACCOUNT_ID": "3eed46cc48f123cdff00d116df5e5070",
   },
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "yuma-factory-sandbox",

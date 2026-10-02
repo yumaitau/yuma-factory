@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { createHash } from "node:crypto";
 import { claudeLimits, claudeOutput, executionOutput, jsonLines, redactOutput } from "./output.mjs";
+import { startProxy } from "./workers-ai.mjs";
 
 const root = "/factory";
 const home = "/home/factory/.codex";
@@ -66,6 +67,39 @@ async function readNoFollow(file) {
   } finally {
     await handle.close();
   }
+}
+
+/** Workers AI settings, written root-only by the runner; null for subscriptions. */
+async function workersAiSettings() {
+  try {
+    const settings = JSON.parse(await fs.readFile(`${root}/workers-ai.json`, "utf8"));
+    return settings.auth_mode === "workers_ai" && typeof settings.token === "string" &&
+      /^[a-f0-9]{32}$/.test(settings.accountId) && typeof settings.model === "string" ? settings : null;
+  } catch {
+    return null;
+  }
+}
+const WORKERS_AI_STATUS = { status: "ready", plan: "Workers AI" };
+const WORKERS_AI_PORT = 8788;
+/** Codex drives Workers AI through the localhost proxy instead of a ChatGPT login. */
+async function startWorkersAi(settings) {
+  await fs.writeFile(`${home}/config.toml`, [
+    `model = ${JSON.stringify(settings.model)}`,
+    'model_provider = "workers-ai"',
+    "model_context_window = 200000",
+    "model_auto_compact_token_limit = 160000",
+    'model_reasoning_effort = "medium"',
+    "",
+    "[model_providers.workers-ai]",
+    'name = "Cloudflare Workers AI"',
+    `base_url = "http://127.0.0.1:${WORKERS_AI_PORT}/v1"`,
+    'wire_api = "responses"',
+    "stream_idle_timeout_ms = 900000",
+    "request_max_retries = 3",
+    "stream_max_retries = 3",
+    "",
+  ].join("\n"));
+  return startProxy({ token: settings.token, accountId: settings.accountId, model: settings.model, port: WORKERS_AI_PORT });
 }
 
 /** A Claude subscription's setup token, written root-only by the runner; null for Codex. */
@@ -219,6 +253,10 @@ async function status(server) {
   };
 }
 async function account(mode) {
+  if (await workersAiSettings()) {
+    await write("account", WORKERS_AI_STATUS);
+    return;
+  }
   const token = await claudeToken();
   if (token) {
     try {
@@ -311,10 +349,12 @@ async function run() {
   const logs = [];
   let inputTokens = 0,
     outputTokens = 0;
-  const claude = await claudeToken();
-  const agentName = claude ? "Claude" : "Codex";
+  const workersAi = await workersAiSettings();
+  const claude = workersAi ? null : await claudeToken();
+  const agentName = claude ? "Claude" : workersAi ? "Workers AI" : "Codex";
   let claudeLimitsSeen = null;
-  const sensitive = new Set([req.githubToken, claude].filter(Boolean));
+  const sensitive = new Set([req.githubToken, claude, workersAi?.token].filter(Boolean));
+  const proxy = workersAi ? await startWorkersAi(workersAi) : null;
   const rememberTokens = async () => {
     try {
       const auth = JSON.parse(await fs.readFile(`${home}/auth.json`, "utf8"));
@@ -409,7 +449,7 @@ async function run() {
   const progress = async (message) => { appendLog(message); await flushProgress(); };
   try {
     // Claude reports usage on each request; checking first would spend it. Claims already skip exhausted accounts.
-    if (!claude) {
+    if (!claude && !workersAi) {
       const server = appServer();
       let initial;
       try {
@@ -466,7 +506,7 @@ async function run() {
     await fs.chmod(notesDir, 0o1777);
     await progress(
       req.probe
-        ? `Checking ${agentName} subscription execution.`
+        ? `Checking ${agentName} execution.`
         : `Repository cloned: ${req.repoFullName}`,
     );
     // Live channel: team memory and the epic thread over MCP, scoped to this run by its token.
@@ -494,7 +534,7 @@ async function run() {
       "-o",
       "/workspace/summary.txt",
     ];
-    if (req.model) args.push("-m", req.model);
+    if (req.model && !workersAi) args.push("-m", req.model);
     args.push("-");
     const claudeCommand = claudeArgs([
       "--dangerously-skip-permissions",
@@ -861,7 +901,10 @@ async function run() {
     appendLog(e.message);
     result = { status: "failed", pullRequestUrl: e.pullRequestUrl ?? pullRequestUrl, ...(e.retryable === false ? { retryable: false } : {}) };
   }
-  if (claude) {
+  proxy?.close();
+  if (workersAi) {
+    result.accountStatus = WORKERS_AI_STATUS;
+  } else if (claude) {
     // The run's own rate-limit events report usage; no extra request is spent.
     result.accountStatus = {
       status: limitedStatus(claudeLimitsSeen) ? "limited" : "ready",

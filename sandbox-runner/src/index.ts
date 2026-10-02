@@ -1,6 +1,10 @@
 import { getSandbox, type Sandbox as SandboxType } from "@cloudflare/sandbox";
 import {
+  DEFAULT_WORKERS_AI_MODEL,
   isClaudeLogin,
+  isWorkersAiLogin,
+  validWorkersAiModel,
+  WORKERS_AI_LOGIN,
   validateAuthFile,
   validateClaudeToken,
   validateStoredLogin,
@@ -22,7 +26,18 @@ type Env = {
   LABEL_PREFIX?: string;
   COMMIT_AUTHOR_NAME?: string;
   COMMIT_AUTHOR_EMAIL?: string;
+  // Workers AI: a Cloudflare API token limited to Workers AI, its account, and an optional model override.
+  WORKERS_AI_TOKEN?: string;
+  WORKERS_AI_ACCOUNT_ID?: string;
+  WORKERS_AI_MODEL?: string;
 };
+function workersAiSettings(env: Env) {
+  const model = env.WORKERS_AI_MODEL?.trim() || DEFAULT_WORKERS_AI_MODEL;
+  if (!env.WORKERS_AI_TOKEN || !/^[a-f0-9]{32}$/.test(env.WORKERS_AI_ACCOUNT_ID ?? "") || !validWorkersAiModel(model))
+    throw new Error("Workers AI is not configured on the runner.");
+  return { auth_mode: "workers_ai", token: env.WORKERS_AI_TOKEN, accountId: env.WORKERS_AI_ACCOUNT_ID, model };
+}
+const WORKERS_AI_STATUS: AccountStatus = { status: "ready", plan: "Workers AI" };
 // Deployment settings the bridge needs, delivered alongside each request.
 function runnerSettings(env: Env) {
   return {
@@ -37,6 +52,8 @@ function runnerSettings(env: Env) {
 const home = "/home/factory/.codex";
 // Root-only: the bridge hands the Claude token to the agent process, never to the repo.
 const claudeAuth = "/factory/claude-auth.json";
+// Root-only: only the bridge's localhost proxy reads the Workers AI token; the agent never sees it.
+const workersAiAuth = "/factory/workers-ai.json";
 function sandbox(env: Env, id: string) {
   return getSandbox(env.Sandbox, id, { sleepAfter: "60m" });
 }
@@ -92,6 +109,11 @@ async function load(env: Env, id: string) {
 async function restore(env: Env, id: string, sb: ReturnType<typeof sandbox>) {
   const auth = await load(env, id);
   if (!auth) throw new Error("Subscription is not connected.");
+  if (isWorkersAiLogin(auth)) {
+    await sb.mkdir("/factory", { recursive: true });
+    await sb.writeFile(workersAiAuth, JSON.stringify(workersAiSettings(env)));
+    return;
+  }
   if (isClaudeLogin(auth)) {
     await sb.mkdir("/factory", { recursive: true });
     await sb.writeFile(claudeAuth, auth);
@@ -124,8 +146,8 @@ async function read<T>(
  */
 async function persist(env: Env, id: string, sb: ReturnType<typeof sandbox>, sameAccount = false) {
   const stored = await load(env, id);
-  // Claude setup tokens never refresh inside the sandbox; the vault copy stays authoritative.
-  if (stored && isClaudeLogin(stored)) return;
+  // Claude setup tokens and Workers AI never refresh inside the sandbox; the vault copy stays authoritative.
+  if (stored && (isClaudeLogin(stored) || isWorkersAiLogin(stored))) return;
   const file = await sb.readFile(`${home}/auth.json`);
   if (sameAccount) {
     const parse = (raw: string | null) => {
@@ -223,7 +245,7 @@ const worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health")
-      return Response.json({ ok: true, providers: ["codex", "claude"] });
+      return Response.json({ ok: true, providers: ["codex", "claude", "workersai"] });
     if (!(await secretMatches(request.headers.get("x-runner-secret"), env.RUNNER_SHARED_SECRET)))
       return Response.json({ error: "Unauthorised" }, { status: 401 });
     const parts = url.pathname.split("/").filter(Boolean);
@@ -240,6 +262,11 @@ const worker = {
         }
         if (request.method === "POST" && action === "connect") {
           const data = await body(request);
+          if (data.workersAi) {
+            workersAiSettings(env);
+            await storeAuth(env, id, WORKERS_AI_LOGIN);
+            return Response.json(WORKERS_AI_STATUS);
+          }
           await sb.mkdir("/factory", { recursive: true });
           if (data.token) {
             await storeAuth(env, id, validateClaudeToken(String(data.token)));
@@ -280,6 +307,11 @@ const worker = {
           );
         }
         if (request.method === "GET") {
+          // No login to check: Workers AI is ready whenever the runner holds its token.
+          if (isWorkersAiLogin((await load(env, id)) ?? "")) {
+            workersAiSettings(env);
+            return Response.json(WORKERS_AI_STATUS);
+          }
           const proc = await sb.getProcess("login");
           console.log(
             "Codex login process",
@@ -386,6 +418,7 @@ const worker = {
           await restore(env, data.accountId, sb);
           await sb.mkdir("/factory", { recursive: true });
           await sb.writeFile("/factory/request.json", JSON.stringify({ ...data, ...runnerSettings(env) }));
+          await installScripts(sb);
           await sb.startProcess("node /opt/factory/bridge.mjs run", {
             processId: "codex-run",
             autoCleanup: false,

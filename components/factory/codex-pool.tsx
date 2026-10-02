@@ -58,7 +58,7 @@ export function CodexPool({
   const [login, setLogin] = useState<(AccountStatus & { id: string }) | null>(
     null,
   );
-  const [provider, setProvider] = useState<Provider>("codex");
+  const [provider, setProvider] = useState<Provider>("workersai");
   const form = useRef<HTMLFormElement>(null);
   const router = useRouter();
   const act = (fn: () => Promise<unknown>) =>
@@ -105,9 +105,9 @@ export function CodexPool({
           Connect a subscription
         </h2>
         <p className="mb-4 text-sm text-muted-foreground">
-          Sign in with each ChatGPT account for Codex, or add a Claude
-          subscription token for Claude Code. Each subscription keeps its own
-          usage limits.
+          Use Cloudflare Workers AI for pay-per-use runs with no subscription
+          limits, sign in with each ChatGPT account for Codex, or add a Claude
+          subscription token for Claude Code.
         </p>
         <form
           ref={form}
@@ -122,7 +122,7 @@ export function CodexPool({
         >
           <fieldset className="flex gap-4 text-sm">
             <legend className="sr-only">Agent</legend>
-            {(["codex", "claude"] as const).map((value) => (
+            {(["workersai", "codex", "claude"] as const).map((value) => (
               <label key={value} className="flex items-center gap-2">
                 <input type="radio" name="provider" value={value} checked={provider === value}
                   onChange={() => setProvider(value)} />
@@ -148,7 +148,12 @@ export function CodexPool({
             <input type="checkbox" name="shared" />
             Allow team members to assign work to this subscription
           </label>
-          {provider === "claude" ? (
+          {provider === "workersai" ? (
+            <p className="text-xs text-muted-foreground">
+              Runs Codex against a Cloudflare Workers AI model, billed per token to the
+              runner&apos;s Cloudflare account. No sign-in is needed.
+            </p>
+          ) : provider === "claude" ? (
             <div>
               <Label htmlFor="claude-token">Claude subscription token</Label>
               <Input id="claude-token" name="token" type="password" required autoComplete="off"
@@ -318,7 +323,7 @@ export function CodexPool({
                   >
                     Test connection
                   </Button>
-                  {entry.provider !== "claude" && <Button
+                  {entry.provider === "codex" && <Button
                     size="sm"
                     variant="outline"
                     disabled={pending || busy}

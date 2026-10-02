@@ -311,3 +311,28 @@ test('ordinary successful completion survives destruction and a failed release c
   assert.equal(f.job().terminalResult?.status, 'succeeded');
   assert.deepEqual(await recoverJob(f.bucket, 'run', 'account', ops, 3000), result);
 });
+
+test('a coding run silent past Codex\'s time limit restarts; a silent CI wait does not', async () => {
+  const silent = '2026-01-01T00:00:00.000Z';
+  const after = Date.parse(silent) + 61 * 60_000;
+  const f = fixture(1);
+  let paused = 0;
+  const ops = {
+    inspect: async () => ({ running: true, result: null, progress: { status: 'running' as const, log: 'Command completed (exit 0)', outputUpdatedAt: silent } }),
+    pause: async () => { paused++; },
+    start: async () => assert.fail('Restart waits for the backoff'),
+  };
+  await recoverJob(f.bucket, 'run', 'account', ops, after);
+  assert.equal(paused, 1);
+  assert.ok(f.job().retryAt);
+  assert.match(f.job().progress?.log ?? '', /No output for 60 minutes/);
+
+  const waiting = fixture(1);
+  await recoverJob(waiting.bucket, 'run', 'account', {
+    inspect: async () => ({ running: true, result: null, progress: { status: 'running' as const, log: 'Waiting for CI on the current PR head.',
+      pullRequestUrl: 'https://github.com/owner/repo/pull/1', outputUpdatedAt: silent } }),
+    pause: async () => assert.fail('CI waits are legitimately quiet'),
+    start: async () => assert.fail('Still running'),
+  }, after);
+  assert.equal(waiting.job().retryAt, undefined);
+});

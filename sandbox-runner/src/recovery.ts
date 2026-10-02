@@ -28,6 +28,8 @@ type Operations = {
   start(request: RunRequest, recovering: boolean): Promise<void>;
   pause?(result: RunResult | null): Promise<void>;
 };
+// Codex is killed after 45 minutes, so a coding phase silent this long has lost its supervisor.
+export const SILENT_CODING_MS = 60 * 60_000;
 export const retryDelay = (attempt: number) => Math.min(15 * 60_000, 60_000 * 2 ** Math.min(Math.max(attempt - 1, 0), 4));
 
 /** Optional evidence/credential reads must not prevent stopping an unhealthy sandbox. */
@@ -106,6 +108,13 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
         state.progress?.outputUpdatedAt && now - Date.parse(state.progress.outputUpdatedAt) >= 30 * 60_000) {
         state.result = { ...state.progress, status: 'failed', retryable: false,
           log: `${state.progress.log}\nMain pipeline did not complete within 30 minutes. Check workflow triggers and pending checks before retrying. Ticket left open; subscription released.` };
+      }
+      // Before a PR exists, the bridge always reports new output within Codex's time limit.
+      // Silence past it means a wedged supervisor; restart it on a fresh sandbox.
+      if (state.running && !state.result && !state.progress?.pullRequestUrl && state.progress?.outputUpdatedAt &&
+        now - Date.parse(state.progress.outputUpdatedAt) >= SILENT_CODING_MS) {
+        state.result = { ...state.progress, status: 'failed',
+          log: `${state.progress.log}\nNo output for 60 minutes while coding. Restarting on a fresh runner.` };
       }
       // Repeating coding cannot grant a GitHub App permission. Preserve the PR
       // and surface the failed run instead of reserving this account indefinitely.

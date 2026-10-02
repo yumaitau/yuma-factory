@@ -305,6 +305,22 @@ test("a repository without any CI keeps a declined PR for review", async () => {
   assert.equal(calls, 1);
 });
 
+test("CI stuck pending for 2 hours leaves the PR for review", async () => {
+  let time = 0;
+  const messages = [];
+  const result = await finishWithGreenCI({
+    snapshot: async () => ({ ...evaluateCI([{ name: "test", status: "queued" }], [], []), sha: "head" }),
+    repair: async () => assert.fail("Queued CI is not a code failure"),
+    closeIssue: async () => assert.fail("Unverified work must not close the issue"),
+    progress: async (message) => { messages.push(message); },
+    wait: async () => { time += 30 * 60_000; },
+    now: () => time,
+  });
+  assert.equal(result, null);
+  assert.equal(time, 2 * 60 * 60_000);
+  assert.match(messages.at(-1), /offline runner/);
+});
+
 test("CI that registers late on the PR resets the no-CI clock", async () => {
   let time = 0;
   let closed = 0;

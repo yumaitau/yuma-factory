@@ -128,6 +128,8 @@ export const NO_PR_CI_MS = 30 * 60_000;
 // A repository with no workflows and no required checks can only get CI from an external app.
 export const NO_CI_REPO_MS = 5 * 60_000;
 export const NO_MAIN_CI_MS = 10 * 60_000;
+// CI that stays pending this long is usually queued for an offline self-hosted runner.
+export const PENDING_CI_MS = 2 * 60 * 60_000;
 // Repairs in a row that change nothing before the PR is left for a human.
 export const MAX_IDLE_REPAIRS = 3;
 
@@ -150,8 +152,16 @@ export async function finishWithGreenCI({ snapshot, repair, closeIssue, closeWit
   let emptySince = null;
   let idleRepairs = 0;
   let keepForReview = false;
+  let pendingSince = null;
   for (;;) {
     const current = await snapshot();
+    if (current.state === "pending" && !current.empty && !current.closed) {
+      pendingSince ??= now();
+      if (now() - pendingSince >= PENDING_CI_MS) {
+        await progress("CI has not finished within 2 hours; its jobs may be queued for an offline runner. PR left open for review; subscription released.");
+        return null;
+      }
+    } else pendingSince = null;
     if (current.empty) {
       emptySince ??= now();
       if (current.noCI && closeWithoutCI && !keepForReview && !current.blocked && !current.closed &&

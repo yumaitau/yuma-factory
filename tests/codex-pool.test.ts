@@ -135,7 +135,8 @@ test("paused runs keep their slot and resume only onto a usable subscription", a
   assert.equal(await reserveRunAccount("shared", "a", "waiting", true, db), false);
   sqlite.exec("UPDATE codex_accounts SET status = 'ready', shared = 0 WHERE id = 'shared'");
   assert.equal(await reserveRunAccount("shared", "a", "waiting", true, db), false); // sharing revoked
-  sqlite.exec("UPDATE codex_accounts SET shared = 1 WHERE id = 'shared'");
+  // Disabling stops new work only; the run already on this subscription may finish.
+  sqlite.exec("UPDATE codex_accounts SET shared = 1, enabled = 0 WHERE id = 'shared'");
   assert.equal(await reserveRunAccount("shared", "a", "waiting", true, db), true);
   assert.equal(await reserveRunAccount("shared", "a", "waiting", false, db), true); // renewal keeps its lease
   assert.equal(await accountBusy("shared", db), true);
@@ -146,6 +147,8 @@ test("paused runs keep their slot and resume only onto a usable subscription", a
   sqlite.exec("UPDATE runs SET status = 'succeeded' WHERE id = 'waiting'");
   assert.equal(await reserveRunAccount("shared", "a", "other", true, db), true);
   sqlite.exec("UPDATE runs SET status = 'cancelled'");
+  await assert.rejects(claimAccount("a", "while-disabled", db), /No available/);
+  sqlite.exec("UPDATE codex_accounts SET enabled = 1 WHERE id = 'shared'");
   assert.equal((await claimAccount("a", "after-stop", db)).id, "shared");
   sqlite.close();
 });

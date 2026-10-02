@@ -227,9 +227,10 @@ export async function reserveRunAccount(id: string, userId: string, runId: strin
   if (legacy) return true;
   if (!resume) return false;
   // Paused runs already count toward the subscription's slots; executing leases stay within max_runs.
+  // Disabling only stops new work: a run already on this subscription may still finish.
   const claimed = await db.all(sql`insert into account_leases (holder_id, account_id, created_at)
     select ${runId}, id, unixepoch() from codex_accounts
-    where id = ${id} and enabled = 1 and active_run_id is null and status in ('ready', 'limited')
+    where id = ${id} and active_run_id is null and status in ('ready', 'limited')
       and (owner_user_id = ${userId} or shared = 1)
       and (select count(*) from (${liveLeases(sql`codex_accounts.id`)})) < max_runs
     on conflict do nothing

@@ -6,8 +6,10 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 
 export async function getSession() {
+  // Read request headers first: awaiting auth setup first lets a build prerender finish, then headers() rejects.
+  const requestHeaders = await headers();
   const auth = await getAuth();
-  return auth.api.getSession({ headers: await headers() });
+  return auth.api.getSession({ headers: requestHeaders });
 }
 
 /**

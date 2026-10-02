@@ -83,7 +83,7 @@ test("one subscription runs several tickets at once, never beyond its limit", as
   assert.equal((await claimAccount("a", "four", db)).id, "solo");
   await setAccountMaxRuns("solo", "a", 3, db);
   assert.equal(await availableSlots("a", db), 1);
-  await assert.rejects(setAccountMaxRuns("solo", "a", 6, db), /between 1 and 5/);
+  await assert.rejects(setAccountMaxRuns("solo", "a", 11, db), /between 1 and 10/);
   await assert.rejects(setAccountMaxRuns("solo", "b", 2, db), /not found/);
   sqlite.close();
 });

@@ -256,8 +256,9 @@ export function CodexPool({
                 </span>
               </div>
               <p className="mt-1 text-sm text-muted-foreground">
-                {entry.email ?? "Not signed in"}
-                {entry.plan ? ` · ${entry.plan}` : ""}
+                {entry.provider === "workersai"
+                  ? (entry.status === "ready" ? "Connected · pay per use on Cloudflare" : "Not connected")
+                  : <>{entry.email ?? "Not signed in"}{entry.plan ? ` · ${entry.plan}` : ""}</>}
               </p>
               {["primary", "secondary"].map((key, i) => {
                 const w = limits?.[key as "primary" | "secondary"];
@@ -278,7 +279,7 @@ export function CodexPool({
                   </div>
                 ) : null;
               })}
-              {!limits && (
+              {!limits && entry.provider !== "workersai" && (
                 <p className="mt-3 text-xs text-muted-foreground">
                   Usage availability not yet reported by {agentName}.
                 </p>

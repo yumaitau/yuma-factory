@@ -6,7 +6,7 @@ import { Logo } from "@/components/studio/logo";
 import { APP_NAME } from "@/lib/brand";
 
 const NAV = [
-  { href: "/work", label: "Work board" },
+  { href: "/work", label: "Work" },
   { href: "/", label: "Projects" },
   { href: "/plans", label: "Plans" },
   { href: "/memory", label: "Memory" },

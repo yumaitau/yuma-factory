@@ -7,7 +7,7 @@ export type OutstandingLane = (typeof OUTSTANDING_LANES)[number];
 
 export const LANE_LABELS: Record<OutstandingLane, string> = {
   attention: 'Needs attention',
-  review: 'Review',
+  review: 'Ready for review',
   running: 'Running',
   waiting: 'Waiting',
   queued: 'Queued',

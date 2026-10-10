@@ -68,6 +68,21 @@ export async function setGithubIssueRisk(client: GithubClient, owner: string, re
   return labelNames(updated.labels);
 }
 
+/** Add or remove <prefix>:ready, the label that requests automatic pickup. */
+export async function setGithubIssueReady(client: GithubClient, owner: string, repo: string, issueNumber: number, ready: boolean) {
+  const params = { owner, repo, issue_number: issueNumber, request: { signal: AbortSignal.timeout(20_000) } };
+  if (ready) {
+    await ensureRepoLabel(client, params, LABELS.ready, '1F6FEB', `${APP_NAME} picks this ticket up automatically.`);
+    await client.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', { ...params, labels: [LABELS.ready] });
+  } else {
+    try {
+      await client.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', { ...params, name: LABELS.ready });
+    } catch (error) { if (statusOf(error) !== 404) throw error; }
+  }
+  const { data: issue } = await client.request('GET /repos/{owner}/{repo}/issues/{issue_number}', params);
+  return labelNames(issue.labels);
+}
+
 /** Idempotent: retries retain unrelated labels and only close after the done label is applied. */
 export async function markGithubIssueDone(client: GithubClient, owner: string, repo: string, issueNumber: number, options?: { pullNumber?: number; sha?: string }) {
   const params = { owner, repo, issue_number: issueNumber, request: { signal: AbortSignal.timeout(20_000) } };

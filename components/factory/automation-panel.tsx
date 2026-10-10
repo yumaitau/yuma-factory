@@ -86,7 +86,7 @@ export function AutomationPanel({ status, userId }: { status: AutomationStatus; 
         {status.error && <p role="alert" className="mt-2 whitespace-pre-line text-sm text-primary">{status.error}</p>}
         {!status.enabled && <p className="mt-1 text-xs text-muted-foreground">Pausing stops new pickup; existing runs continue.</p>}
         <div className="mt-3 flex gap-4 text-xs">
-          <Link className="underline" href="/work">Live work board</Link>
+          <Link className="underline" href="/work">Work</Link>
           <Link className="underline" href="/agents">Worker agents</Link>
           <Link className="underline" href="/pool">Codex and Claude subscriptions</Link>
         </div>

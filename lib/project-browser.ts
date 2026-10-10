@@ -15,8 +15,8 @@ export const WORK_FILTERS = [
   ['intake', 'Intake'],
   ['assigned', 'Assigned'],
   ['in_progress', 'In progress'],
-  ['review', 'Review'],
-  ['done', 'Done'],
+  ['review', 'Ready for review'],
+  ['done', 'Integrated'],
 ] as const;
 
 export const PROJECT_SORTS = [

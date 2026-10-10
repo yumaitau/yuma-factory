@@ -286,7 +286,7 @@ export async function assignTicket(ticketId: string, agentId: string | null) {
     })
     .where(and(eq(tickets.id, ticketId), sql`not exists (select 1 from runs where ticket_id = ${ticketId} and status = 'running')`))
     .returning({ id: tickets.id });
-  if (!changed.length) throw new Error('Stop the active run on the Work board before reassigning this ticket.');
+  if (!changed.length) throw new Error('Stop the active run on Work before reassigning this task.');
 }
 
 /* --------------------------------- Agents -------------------------------- */

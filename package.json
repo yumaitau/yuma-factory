@@ -22,9 +22,11 @@
     "test": "node --conditions=react-server --import tsx --test tests/*.test.ts tests/*.test.mjs"
   },
   "dependencies": {
+    "@dnd-kit/core": "6.3.1",
     "@octokit/auth-app": "8.0.1",
     "@octokit/webhooks": "14.1.0",
     "@opennextjs/cloudflare": "^1.14.8",
+    "@radix-ui/react-dialog": "^1.2.0",
     "@radix-ui/react-label": "^2.1.7",
     "better-auth": "1.6.25",
     "class-variance-authority": "^0.7.1",

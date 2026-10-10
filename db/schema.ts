@@ -243,11 +243,51 @@ export const runs = sqliteTable(
     startedAt: integer("started_at", { mode: "timestamp" }),
     finishedAt: integer("finished_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    // Branch this run publishes to; a follow-up run reuses its parent's branch and PR.
+    branchName: text("branch_name"),
+    // The finished run a follow-up prompt continued from.
+    parentRunId: text("parent_run_id"),
+    // Agent's latest plan, replaced wholesale: JSON [{content, status: pending|inProgress|completed|canceled}].
+    plan: text("plan"),
   },
   (table) => [
     index("runs_ticket_idx").on(table.ticketId),
     index("runs_agent_idx").on(table.agentId),
     index("runs_status_idx").on(table.status),
+  ],
+);
+
+/**
+ * A run's agent session timeline: what the agent thought and did, and what people asked of it.
+ * seq is monotonic per run and assigned on insert. Agent activities dedupe on sourceKey.
+ */
+export const runActivities = sqliteTable(
+  "run_activities",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    ticketId: text("ticket_id").notNull().references(() => tickets.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    type: text("type").notNull(), // thought|action|elicitation|response|error|prompt
+    body: text("body").notNull().default(""),
+    // type=action only: verb, its short target, and a truncated result.
+    action: text("action"),
+    parameter: text("parameter"),
+    result: text("result"),
+    // thought/action only: hidden once a later agent activity arrives.
+    ephemeral: integer("ephemeral", { mode: "boolean" }).notNull().default(false),
+    signal: text("signal"), // prompt only: 'stop' | null
+    authorUserId: text("author_user_id"),
+    // `<bridge process>:<n>` from the runner; null for prompts.
+    sourceKey: text("source_key"),
+    // prompt only: when the runner took it, or when it was applied on the app side.
+    deliveredAt: integer("delivered_at", { mode: "timestamp_ms" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("run_activities_seq_uidx").on(table.runId, table.seq),
+    uniqueIndex("run_activities_source_uidx").on(table.runId, table.sourceKey),
+    index("run_activities_ticket_idx").on(table.ticketId),
   ],
 );
 

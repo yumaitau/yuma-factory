@@ -11,6 +11,8 @@ export type RunRequest = {
   model?: string;
   // Plan runs propose a work breakdown; they never publish code.
   mode?: 'implement' | 'plan';
+  // A follow-up codes on an existing branch; without it an existing branch means recovery.
+  followUp?: boolean;
 };
 export type DurableJob = {
   accountId: string;

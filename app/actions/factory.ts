@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { getGithubApp, listInstallationRepos, listRepoIssues } from "@/lib/github";
-import { setGithubIssueRisk } from "@/lib/github-completion";
+import { setGithubIssueReady, setGithubIssueRisk } from "@/lib/github-completion";
+import { workMove } from "@/lib/board-moves";
+import { workBoardCards } from "@/lib/work-board-query";
 import {
   assignTicket,
   createAgent,
@@ -127,6 +129,32 @@ export async function moveTicketAction(ticketId: string, stage: string) {
     return { ok: true };
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not move ticket.' };
+  }
+}
+
+/** A Work board drop. The lane is re-derived here, so the client's view never decides the move. */
+export async function moveWorkCardAction(ticketId: string, lane: string) {
+  await requireSession();
+  try {
+    const card = (await workBoardCards()).find((item) => item.id === ticketId);
+    if (!card) throw new Error('This task is no longer on the Work board.');
+    const move = workMove(card, lane);
+    if ('error' in move) throw new Error(move.error);
+    // moveTicket refuses while a run is active, so this goes before any GitHub change.
+    if (move.requeue) await setTicketStage(ticketId, 'intake', true);
+    if (move.ready !== undefined) {
+      const context = await getTicketWithContext(ticketId);
+      if (!context?.installation) throw new Error('Ticket or GitHub installation is unavailable.');
+      const [owner, repo] = context.project.repoFullName.split('/');
+      const client = await getGithubApp().getInstallationOctokit(context.installation.installationId);
+      await setTicketLabels(ticketId, await setGithubIssueReady(client, owner, repo, context.ticket.githubIssueNumber, move.ready));
+    }
+    return { ok: true };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not move this task.' };
+  } finally {
+    // A requeue can succeed before the label change fails; show whatever was saved.
+    revalidatePath('/', 'layout');
   }
 }
 

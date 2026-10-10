@@ -7,10 +7,12 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { ConnectGithub } from '@/components/factory/connect-github';
 import { ProjectBrowser } from '@/components/factory/project-browser';
 import { AutomationPanel } from '@/components/factory/automation-panel';
+import { DecisionSummary } from '@/components/factory/decision-summary';
 import { automationStatus } from '@/lib/automation-state';
 import { githubConfigured } from '@/lib/env';
 import { getInstallUrl } from '@/lib/github';
 import { listProjects, ticketCountsByProject } from '@/lib/queries';
+import { workBoardCards } from '@/lib/work-board-query';
 import { requireSession } from '@/lib/session';
 
 export default function HomePage() {
@@ -27,9 +29,9 @@ async function Dashboard() {
   const configured = githubConfigured();
   const installUrl = configured ? safeInstallUrl() : null;
 
-  const projects = await listProjects();
-  const counts = await ticketCountsByProject();
-  const worker = await automationStatus();
+  const [projects, counts, worker, cards] = await Promise.all([
+    listProjects(), ticketCountsByProject(), automationStatus(), workBoardCards(),
+  ]);
 
   return (
     <AppShell email={session.user.email}>
@@ -37,7 +39,7 @@ async function Dashboard() {
         <div>
           <h1 className="text-2xl font-semibold">Projects</h1>
           <p className="text-sm text-muted-foreground">
-            Connected repositories. Each card shows open tickets by workflow stage.
+            What needs attention, what is in progress, and what is ready for review. Repositories sit below that.
           </p>
         </div>
         {projects.length > 0 && installUrl ? (
@@ -51,11 +53,12 @@ async function Dashboard() {
         ) : null}
       </div>
 
-      <AutomationPanel status={worker} userId={session.user.id} />
       {projects.length === 0 ? (
         <ConnectGithub installUrl={installUrl} />
       ) : (
-        <ProjectBrowser projects={projects.map((project) => ({
+        <>
+          <DecisionSummary cards={cards} />
+          <ProjectBrowser projects={projects.map((project) => ({
           id: project.id,
           repoFullName: project.repoFullName,
           description: project.description,
@@ -64,7 +67,11 @@ async function Dashboard() {
           createdAt: project.createdAt.getTime(),
           counts: counts.get(project.id) ?? {},
         }))} />
+        </>
       )}
+      <div className="mt-8">
+        <AutomationPanel status={worker} userId={session.user.id} />
+      </div>
     </AppShell>
   );
 }

@@ -36,7 +36,7 @@ export function WorkReview({ completed }: { completed: CompletedWork[] }) {
         <h2 id="review-heading" className="text-lg font-semibold">PRs to review{queue ? ` (${queue.pulls.length})` : ''}</h2>
         <button className="rounded-md border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50" disabled={loading} onClick={() => setRefresh((n) => n + 1)}>{loading ? 'Checking GitHub…' : 'Refresh PRs'}</button>
       </div>
-      <p className="my-3 text-xs text-muted-foreground">Open PRs created by Factory, including completed tickets. Low-risk tickets merge automatically after green CI. Other merging stays with you.</p>
+      <p className="my-3 text-xs text-muted-foreground">Open pull requests from Factory. Reviewing one does not merge it and does not deploy it. Low-risk tickets merge automatically after green CI. Other merging stays with you.</p>
       {error && <p role="alert" className="mb-3 text-sm text-primary">{error}</p>}
       {!!queue?.unavailableRepos.length && <p role="alert" className="mb-3 text-sm">GitHub status unavailable for {queue.unavailableRepos.join(', ')}. Queue may be incomplete.</p>}
       {!queue && loading && <p role="status" className="py-4 text-sm text-muted-foreground">Loading pull requests…</p>}
@@ -45,7 +45,7 @@ export function WorkReview({ completed }: { completed: CompletedWork[] }) {
         <div className="min-w-0 flex-1 basis-48">
           <p className="break-all text-xs text-muted-foreground">{pr.repo} #{pr.number}</p>
           <a className="mt-1 block wrap-anywhere text-sm font-medium hover:underline" href={pr.url} target="_blank" rel="noreferrer">{pr.title}</a>
-          <p className="mt-1 text-xs text-muted-foreground">{pr.draft ? 'Draft' : pr.running ? 'Codex still working' : 'Ready for your review'} · Updated {formatSydneyDateTime(pr.updatedAt)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{pr.draft ? 'Draft' : pr.running ? 'Agent still working' : 'Ready for your review'} · Updated {formatSydneyDateTime(pr.updatedAt)} · Review does not merge or deploy</p>
         </div>
         <div className="flex gap-3 text-xs"><Link className="underline" href={`/work/runs/${pr.runId}`}>Run output</Link><a className="font-medium text-primary underline" href={pr.url} target="_blank" rel="noreferrer">Review PR</a></div>
       </li>)}</ul>
@@ -53,7 +53,7 @@ export function WorkReview({ completed }: { completed: CompletedWork[] }) {
     </section>
     <section aria-labelledby="completed-heading" className="min-w-0">
       <h2 id="completed-heading" className="border-b pb-3 text-lg font-semibold">Recently completed</h2>
-      <p className="my-3 text-xs text-muted-foreground">Latest 20 successful runs, newest first. A completed run may still have an open PR.</p>
+      <p className="my-3 text-xs text-muted-foreground">Latest 20 runs that finished successfully. A completed run can still have an open pull request. It is not a merge and not a release.</p>
       {!completed.length && <p className="py-4 text-sm text-muted-foreground">Completed work will appear here when a run succeeds.</p>}
       <ul className="max-h-80 divide-y overflow-y-auto">{completed.map((run) => <li key={run.runId} className="flex flex-wrap items-start justify-between gap-3 py-3">
         <div className="min-w-0 flex-1 basis-48"><p className="break-all text-xs text-muted-foreground">{run.repo} #{run.issueNumber}</p>

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { workLane, workReason, type WorkCard } from '../lib/work-board';
+import { deliveryState, executionState, workLane, workReason, type WorkCard } from '../lib/work-board';
 const card: WorkCard = { id: 'ticket', title: 'Fix', number: 1, repo: 'org/repo', projectId: 'project', htmlUrl: 'https://github.com/org/repo/issues/1',
   stage: 'intake', githubState: 'open', labels: ['factory:ready'], assignedAgentId: null, agentName: null, automationSlot: null,
   runStatus: null, runId: null, startedAt: null, finishedAt: null, pullRequestUrl: null };
@@ -45,6 +45,19 @@ test('plan proposals and blocked subtasks explain what they wait for', () => {
   assert.match(workReason({ ...card, runStatus: 'succeeded', runId: 'run', stage: 'review', runMode: 'plan' }), /Plan proposed/);
   assert.equal(workLane({ ...card, blockedBy: [4] }), 'queued');
   assert.match(workReason({ ...card, blockedBy: [4, 5] }), /Waiting for #4, #5 to close/);
+});
+
+test('execution and delivery stay separate when a run finishes or an issue closes', () => {
+  const reviewed = { ...card, runStatus: 'succeeded', runId: 'run', stage: 'review', pullRequestUrl: 'https://github.com/org/repo/pull/2' };
+  assert.equal(executionState(reviewed).id, 'completed');
+  assert.equal(deliveryState(reviewed).id, 'in_review');
+  assert.match(workReason(reviewed), /Merging and deploying are separate/);
+  const closed = { ...card, githubState: 'closed', stage: 'done', runStatus: 'succeeded', runId: 'run' };
+  assert.equal(workLane(closed), 'done');
+  assert.equal(deliveryState(closed).label, 'Integrated');
+  assert.match(workReason(closed), /not a release/);
+  assert.equal(executionState({ ...card, runStatus: 'running', runId: 'run', completionPending: true }).id, 'validating');
+  assert.equal(executionState({ ...card, runStatus: 'cancelled', runId: 'run' }).id, 'cancelled');
 });
 
 test('finished runs explain their own outcome', () => {

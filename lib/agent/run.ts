@@ -19,6 +19,8 @@ import { epicContext, isPlanTicket, postThreadMessage, savePlanProposal, storePl
 import { buildRunPrompt } from '@/lib/run-prompt';
 import { claimRun, reconcileAbandonedClaims } from '@/lib/run-lifecycle';
 import { parsePlan } from '@/lib/plan';
+import { recordPrompt } from '@/lib/run-activities';
+import { ACTIVITY_LIMITS } from '@/lib/run-session';
 
 export async function startCodexRun(
   ticketId: string,
@@ -26,6 +28,8 @@ export async function startCodexRun(
   modelId: string,
   userId: string,
   options?: { automationLabel: string; automationLeaseId: string },
+  // A follow-up continues a finished run: same ticket, its branch and PR when still open, plus the prompt.
+  followUp?: { parentRunId: string; branchName: string | null; prompt: string },
 ) {
   if (!validModel(modelId))
     throw new Error("Choose a model or the subscription default.");
@@ -48,24 +52,31 @@ export async function startCodexRun(
     mode, issueNumber: context.ticket.githubIssueNumber, title: context.ticket.title, body: context.ticket.body,
     agentPrompt: agent.systemPrompt, memoryBlock: memory.block,
     epic: epic?.epic, siblings: epic?.siblings, thread: epic?.thread,
+    followUp: followUp && { body: followUp.prompt, continuing: !!followUp.branchName },
   });
   const runId = newId("run");
+  const branchName = followUp?.branchName ?? `factory/ticket-${context.ticket.githubIssueNumber}-${runId.slice(-8)}`;
   // A pinned provider keeps a provider-specific model off the other CLI.
   const account = await claimAccount(userId, runId, db, isProvider(agent.provider) ? agent.provider : null);
   let inserted = false;
   let dispatched = false;
   try {
-    if (!await claimRun(db, { id: runId, ticketId, agentId, userId, accountId: account.id, modelId, mode }, options))
+    if (!await claimRun(db, { id: runId, ticketId, agentId, userId, accountId: account.id, modelId, mode,
+      branchName, parentRunId: followUp?.parentRunId }, options))
       throw new Error('Ticket or agent is already busy, completed, blocked or unavailable.');
     inserted = true;
     // Usage tracking is advisory; it must never block a run from starting.
     await recordRunMemories(db, runId, memory.selected.map((item) => item.id)).catch(() => {});
+    // The follow-up is already in this run's prompt, so it is recorded as delivered.
+    if (followUp) await recordPrompt(db, { runId, ticketId, body: followUp.prompt, authorUserId: userId, delivered: true });
     dispatched = true;
     await runnerRequest(`/runs/${runId}`, "POST", {
       accountId: account.id,
       repoFullName: context.project.repoFullName,
       defaultBranch: context.project.defaultBranch,
-      branchName: `factory/ticket-${context.ticket.githubIssueNumber}-${runId.slice(-8)}`,
+      branchName,
+      // An existing branch normally means recovery, which skips coding; a follow-up still codes.
+      followUp: !!followUp?.branchName,
       githubToken,
       model: modelId === "codex-default" ? undefined : modelId,
       mode,
@@ -277,17 +288,45 @@ async function afterRun(run: typeof runs.$inferSelect, result: RunResult, ciComp
   }
 }
 
-/** Stop the durable job before releasing its ticket or agent. */
+/**
+ * Stop the durable job before releasing its ticket or agent. Runs are shared with every
+ * signed-in member, so any of them may stop one; the stop is recorded as their prompt.
+ */
 export async function cancelCodexRun(runId: string, userId: string) {
   const db = await getDb();
-  const run = await db.select().from(runs)
-    .where(and(eq(runs.id, runId), eq(runs.requestedByUserId, userId))).get();
-  if (!run) throw new Error('Run unavailable or belongs to another user.');
+  const run = await db.select().from(runs).where(eq(runs.id, runId)).get();
+  if (!run) throw new Error('Run unavailable.');
   if (run.status !== 'running') return;
   if (!run.codexAccountId) throw new Error('Run has no subscription. Contact support to reconcile it.');
   const result = await runnerRequest<RunResult>(`/runs/${run.id}/cancel?accountId=${run.codexAccountId}`, 'POST');
   if (result.status === 'running') throw new Error('Recovery is currently updating this run. Try stopping it again shortly.');
   if (!['cancelled', 'succeeded', 'failed'].includes(result.status) || typeof result.log !== 'string')
     throw new Error('Runner did not confirm that the run stopped.');
+  // Record the stop only once the runner confirmed it, so a failed attempt leaves no stop in the session.
+  await recordPrompt(db, { runId, ticketId: run.ticketId, body: 'Stop', authorUserId: userId, signal: 'stop', delivered: true });
   await completeCodexRun(run.id, result);
+}
+
+/**
+ * Steer a session. A live run queues the prompt; its runner applies it after the current agent turn.
+ * A finished run starts a follow-up run on the same ticket that continues its branch and open PR.
+ */
+export async function promptRun(runId: string, userId: string, body: string) {
+  const prompt = body.trim();
+  if (!prompt || prompt.length > ACTIVITY_LIMITS.prompt)
+    throw new Error(`Write a prompt of up to ${ACTIVITY_LIMITS.prompt} characters.`);
+  const db = await getDb();
+  const run = await db.select().from(runs).where(eq(runs.id, runId)).get();
+  if (!run) throw new Error('Run unavailable.');
+  if (run.status === 'running' || run.status === 'queued') {
+    await recordPrompt(db, { runId, ticketId: run.ticketId, body: prompt, authorUserId: userId });
+    return { runId };
+  }
+  const context = await getTicketWithContext(run.ticketId);
+  if (!context) throw new Error('Ticket unavailable.');
+  // A merged or closed PR cannot take more commits; the follow-up then opens a fresh branch.
+  const continuing = !!run.pullRequestUrl && run.mode === 'implement' && !['merged', 'closed'].includes(run.pullRequestState ?? '');
+  const branchName = continuing ? run.branchName ?? `factory/ticket-${context.ticket.githubIssueNumber}-${run.id.slice(-8)}` : null;
+  const next = await startCodexRun(run.ticketId, run.agentId, run.modelId, userId, undefined, { parentRunId: run.id, branchName, prompt });
+  return { runId: next };
 }

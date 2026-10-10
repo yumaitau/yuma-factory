@@ -389,7 +389,8 @@ const worker = {
             typeof data.prompt !== "string" ||
             data.prompt.length > 40000 ||
             (data.model && !validModel(data.model)) ||
-            (data.mode !== undefined && !["implement", "plan"].includes(data.mode))
+            (data.mode !== undefined && !["implement", "plan"].includes(data.mode)) ||
+            (data.followUp !== undefined && typeof data.followUp !== "boolean")
           )
             throw new Error("Invalid run request.");
           if (
@@ -407,7 +408,7 @@ const worker = {
               accountId: data.accountId, repoFullName: data.repoFullName,
               defaultBranch: data.defaultBranch, branchName: data.branchName,
               prompt: data.prompt, prTitle: data.prTitle, issueNumber: data.issueNumber,
-              model: data.model, mode: data.mode,
+              model: data.model, mode: data.mode, followUp: data.followUp,
             };
             const job: DurableJob = { accountId: data.accountId, request, attempt: 0 };
             await env.CODEX_VAULT.put(`jobs/${id}`, JSON.stringify(job), { onlyIf: { etagDoesNotMatch: "*" } });

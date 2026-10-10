@@ -12,9 +12,9 @@ export const planReady = () => sql`(${tickets.planTask} is null or exists (
 /** One transaction creates the run and claims both resources, or changes neither. */
 export async function claimRun(db: Db, input: {
   id: string; ticketId: string; agentId: string; userId: string; accountId: string;
-  modelId: string; mode: 'implement' | 'plan';
+  modelId: string; mode: 'implement' | 'plan'; branchName?: string; parentRunId?: string;
 }, options?: { automationLabel: string; automationLeaseId: string }) {
-  const { id, ticketId, agentId, userId, accountId, modelId, mode } = input;
+  const { id, ticketId, agentId, userId, accountId, modelId, mode, branchName = null, parentRunId = null } = input;
   const eligible = and(
     eq(tickets.id, ticketId), eq(tickets.githubState, 'open'),
     sql`${tickets.stage} in ('intake', 'assigned', 'review')`,
@@ -38,7 +38,8 @@ export async function claimRun(db: Db, input: {
   const [claimed] = await db.batch([
     db.insert(runs).select(sql`select
       ${id}, ${ticketId}, ${agentId}, 'running', null, ${accountId}, ${userId},
-      ${modelId}, ${mode}, '', null, null, null, null, 0, 0, ${createdAt}, null, ${createdAt}
+      ${modelId}, ${mode}, '', null, null, null, null, 0, 0, ${createdAt}, null, ${createdAt},
+      ${branchName}, ${parentRunId}, null
       from ${tickets} where ${eligible}`).returning({ id: runs.id }),
     db.update(agents).set({ status: 'working', updatedAt: new Date() }).where(and(eq(agents.id, agentId), ownsRun)),
     db.update(tickets).set({ stage: 'in_progress', assignedAgentId: agentId, updatedAt: new Date() })
@@ -56,7 +57,7 @@ export async function moveTicket(db: Db, ticketId: string, stage: TicketStage, r
   const changed = await db.update(tickets).set({ stage, updatedAt: now, ...(requeue ? { requeuedAt } : {}) })
     .where(and(eq(tickets.id, ticketId), sql`not exists (select 1 from runs where ticket_id = ${ticketId} and status = 'running')`))
     .returning({ id: tickets.id });
-  if (!changed.length) throw new Error('Stop the active run on the Work board before moving this ticket.');
+  if (!changed.length) throw new Error('Stop the active run on Work before moving this task.');
 }
 
 

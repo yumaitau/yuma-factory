@@ -71,21 +71,17 @@ test('waiting tickets can stop safely and then move on their project board', asy
     await expect(waiting.getByText('Recover this waiting ticket')).toBeVisible();
     await expect(waiting.getByRole('link', { name: 'Manage subscriptions' })).toBeVisible();
     await waiting.getByRole('link', { name: 'Project board' }).click();
-    await page.getByLabel('Move stage').selectOption('review');
-    await expect(page.getByRole('alert').filter({ hasText: 'Stop the active run' })).toBeVisible();
+    // A ticket with an active run cannot be picked up, and says why.
+    await expect(page.getByRole('button', { name: /^Cannot move #1 .*Stop the active run/ })).toHaveAttribute('aria-disabled', 'true');
     expect(db.prepare('SELECT stage FROM tickets WHERE id = ?').get(ticket)?.stage).toBe('in_progress');
     await page.goto('/work');
-    const stop = waiting.getByRole('button', { name: 'Stop and return to intake' });
+    const stop = waiting.getByRole('button', { name: 'Stop execution and keep changes' });
 
-    // A board is shared, but stopping another user's run must fail before runner dispatch.
+    // A board is shared, so any signed-in member may stop a run; an unreachable runner keeps it running.
     db.prepare('UPDATE runs SET requested_by_user_id = NULL WHERE id = ?').run(run);
-    await stop.click();
-    await expect(page.getByRole('region', { name: 'Factory work board' }).getByRole('alert')).toContainText('belongs to another user');
-    expect(cancellations).toBe(0);
-    db.prepare('UPDATE runs SET requested_by_user_id = ? WHERE id = ?').run(userId, run);
     offline = true;
     await stop.click();
-    await expect(page.getByRole('region', { name: 'Factory work board' }).getByRole('alert')).not.toContainText('belongs to another user');
+    await expect(page.getByRole('region', { name: 'Factory work board' }).getByRole('alert')).toBeVisible();
     await expect(stop).toBeEnabled();
     expect(db.prepare('SELECT status FROM runs WHERE id = ?').get(run)?.status).toBe('running');
     expect(db.prepare('SELECT stage FROM tickets WHERE id = ?').get(ticket)?.stage).toBe('in_progress');
@@ -98,6 +94,8 @@ test('waiting tickets can stop safely and then move on their project board', asy
     expect(db.prepare('SELECT status FROM runs WHERE id = ?').get(run)?.status).toBe('cancelled');
     expect(db.prepare('SELECT status FROM agents WHERE id = ?').get(agent)?.status).toBe('idle');
     expect(db.prepare('SELECT active_run_id FROM codex_accounts WHERE id = ?').get(account)?.active_run_id).toBe('another-operation');
+    // The token callbacks below act for the run's requester, so restore one now that the stop is proven.
+    db.prepare('UPDATE runs SET requested_by_user_id = ? WHERE id = ?').run(userId, run);
     const callback = {
       headers: { 'x-runner-secret': process.env.SANDBOX_RUNNER_SECRET ?? 'e2e-only-runner-secret' },
       data: { id: run, accountId: account, action: 'pause' },
@@ -108,9 +106,19 @@ test('waiting tickets can stop safely and then move on their project board', asy
     await page.reload();
     await expect(intake.getByText('Recover this waiting ticket')).toBeVisible();
     await intake.getByRole('link', { name: 'Project board' }).click();
-    await page.getByLabel('Move stage').selectOption('review');
+    // Keyboard drag: arrows skip In progress, which refuses drops, and stop at Ready for review.
+    // Each key waits for its screen reader announcement, so presses never outrun the drag.
+    const announced = (text: string) => expect(page.getByRole('status').filter({ hasText: text })).toHaveCount(1);
+    await page.getByRole('button', { name: 'Move #1 Recover this waiting ticket' }).focus();
+    await page.keyboard.press('Space');
+    await announced('Picked up #1');
+    for (const column of ['Assigned', 'Ready for review']) {
+      await page.keyboard.press('ArrowRight');
+      await announced(`Over ${column}`);
+    }
+    await page.keyboard.press('Space');
     await expect.poll(() => db.prepare('SELECT stage FROM tickets WHERE id = ?').get(ticket)?.stage).toBe('review');
-    await expect(page.getByLabel('Move stage')).toHaveValue('review');
+    await expect(page.getByRole('region', { name: 'Ready for review tickets' }).getByText('Recover this waiting ticket')).toBeVisible();
   } finally {
     offline = false;
     await page.goto('about:blank');
@@ -162,7 +170,8 @@ test('completed work, open PR review and authenticated live output', async ({ pa
     reviewOpen = false;
     await page.getByRole('button', { name: 'Refresh PRs' }).click();
     await expect(page.getByText('No open Factory PRs waiting for review.')).toBeVisible();
-    await page.getByRole('link', { name: 'Watch this running task' }).click();
+    // The card title opens the issue panel; Watch live goes to the raw log.
+    await page.getByRole('article', { name: 'fixture/work-output#1' }).getByRole('link', { name: /^(Watch live|View output)$/ }).click();
     const output = page.getByLabel('Execution log');
     await expect(output).toContainText('Output event', { timeout: 20_000 });
     const first = polls;

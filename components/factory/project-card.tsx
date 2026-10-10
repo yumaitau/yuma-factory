@@ -11,8 +11,8 @@ const STAGE_LABELS: Record<string, string> = {
   intake: 'Intake',
   assigned: 'Assigned',
   in_progress: 'In progress',
-  review: 'Review',
-  done: 'Done',
+  review: 'Ready for review',
+  done: 'Integrated',
 };
 
 export function ProjectCard({

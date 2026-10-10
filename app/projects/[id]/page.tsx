@@ -54,7 +54,7 @@ async function ProjectBoard({ params }: { params: Promise<{ id: string }> }) {
   }));
 
   return (
-    <AppShell email={session.user.email}>
+    <AppShell email={session.user.email} wide>
       <div className="mb-6 wrap-anywhere">
         <h1 className="text-2xl font-semibold">{project.repoFullName}</h1>
         <p className="text-sm text-muted-foreground">

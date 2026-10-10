@@ -14,6 +14,12 @@
   --accent-dark: #b83d25;
   --accent-light: #fde8e4;
   --surface-alt: #f5f0e9;
+  /* Board status colours: warm enough for the palette, distinct enough to scan. */
+  --status-attention: #b42318;
+  --status-running: #c98a12;
+  --status-waiting: #a8875a;
+  --status-review: #2d7a8c;
+  --status-done: #3d8a5a;
 }
 
 @theme inline {
@@ -30,6 +36,11 @@
   --color-accent-dark: var(--accent-dark);
   --color-accent-light: var(--accent-light);
   --color-surface-alt: var(--surface-alt);
+  --color-status-attention: var(--status-attention);
+  --color-status-running: var(--status-running);
+  --color-status-waiting: var(--status-waiting);
+  --color-status-review: var(--status-review);
+  --color-status-done: var(--status-done);
   --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
   --font-heading: var(--font-sora), ui-sans-serif, system-ui, sans-serif;
 }
@@ -38,3 +49,7 @@
 html, body { margin: 0; min-height: 100dvh; background: var(--background); color: var(--foreground); }
 body { font-family: var(--font-sans); }
 h1, h2, h3 { font-family: var(--font-heading); letter-spacing: -0.02em; }
+
+/* Issue panel entrance. */
+@keyframes sheet-in { from { transform: translateX(24px); opacity: 0; } }
+@keyframes fade-in { from { opacity: 0; } }

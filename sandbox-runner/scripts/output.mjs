@@ -95,3 +95,103 @@ export function redactOutput(value, sensitive = []) {
     .replace(/github_pat_[A-Za-z0-9_]+/g, "[redacted]")
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted]");
 }
+
+// Session activities mirror lib/run-session.ts ACTIVITY_LIMITS; the app clips again on ingest.
+const clip = (value, max) => {
+  const text = String(value ?? "");
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+};
+// Command output matters most at its end.
+const tail = (value, max) => {
+  const text = String(value ?? "").trimEnd();
+  return text.length > max ? `…${text.slice(-(max - 1))}` : text;
+};
+const thought = (text) => (text?.trim() ? { type: "thought", body: clip(text, 8000) } : null);
+const action = (verb, parameter, result, ephemeral = false) => ({
+  type: "action", action: verb, parameter: parameter ? clip(parameter, 500) : null,
+  result: result ? tail(result, 2000) : null, ...(ephemeral ? { ephemeral: true } : {}),
+});
+
+/**
+ * Codex exec --json event -> session activity, or null. Reasoning stays private as in
+ * executionOutput. Started items are ephemeral and superseded by their completion.
+ */
+export function codexActivity(event) {
+  const item = event?.item;
+  if (event?.type === "turn.failed") return { type: "error", body: clip(event.error?.message ?? "Turn failed", 8000) };
+  // Top-level stream errors are usually retried reconnects, not the end of the turn.
+  if (event?.type === "error") return thought(`Codex: ${event.message ?? "execution error"}`);
+  if (!item || !["item.started", "item.completed"].includes(event.type)) return null;
+  const done = event.type === "item.completed";
+  switch (item.type) {
+    case "command_execution":
+      return done
+        ? action("Ran", item.command, `${item.exit_code == null ? item.status ?? "completed" : `exit ${item.exit_code}`}\n${tail(item.aggregated_output ?? "", 1900)}`)
+        : action("Running", item.command, null, true);
+    case "agent_message": return done ? thought(item.text) : null;
+    case "file_change": return done ? action("Edited", (item.changes ?? []).map((c) => c.path).join(", "), (item.changes ?? []).map((c) => `${c.kind}: ${c.path}`).join("\n")) : null;
+    case "mcp_tool_call": return done
+      ? action("Called", `${item.server}/${item.tool}`, item.error?.message ?? item.status ?? "completed")
+      : action("Calling", `${item.server}/${item.tool}`, null, true);
+    case "web_search": return done ? action("Searched", item.query) : null;
+    case "error": return thought(`Codex: ${item.message ?? "error"}`);
+    default: return null;
+  }
+}
+
+// Claude tool -> [in-progress verb, done verb, short parameter].
+const CLAUDE_TOOLS = {
+  Bash: ["Running", "Ran", (i) => i.command],
+  Edit: ["Editing", "Edited", (i) => i.file_path],
+  MultiEdit: ["Editing", "Edited", (i) => i.file_path],
+  Write: ["Writing", "Wrote", (i) => i.file_path],
+  NotebookEdit: ["Editing", "Edited", (i) => i.notebook_path],
+  Read: ["Reading", "Read", (i) => i.file_path],
+  Grep: ["Searching", "Searched", (i) => i.pattern],
+  Glob: ["Searching", "Searched", (i) => i.pattern],
+  WebSearch: ["Searching the web", "Searched the web", (i) => i.query],
+  WebFetch: ["Fetching", "Fetched", (i) => i.url],
+};
+
+/**
+ * Claude stream-json event -> session activities. `tools` remembers each tool_use until its
+ * tool_result arrives. Thinking is never shown; TodoWrite is reported as the plan instead.
+ */
+export function claudeActivities(event, tools = new Map()) {
+  if (event?.type === "result")
+    return event.is_error ? [{ type: "error", body: clip(typeof event.result === "string" && event.result ? event.result : event.subtype ?? "Execution error", 8000) }] : [];
+  const content = event?.message?.content;
+  if (!Array.isArray(content) || !["assistant", "user"].includes(event.type)) return [];
+  const out = [];
+  for (const block of content) {
+    if (block?.type === "text" && event.type === "assistant") {
+      const item = thought(block.text);
+      if (item) out.push(item);
+    } else if (block?.type === "tool_use" && block.name !== "TodoWrite") {
+      const name = String(block.name);
+      const known = CLAUDE_TOOLS[name];
+      const mcp = name.startsWith("mcp__") ? name.slice(5).replace("__", "/") : null;
+      const verbs = known ?? (mcp ? ["Calling", "Called"] : ["Using", "Used"]);
+      const parameter = known ? known[2](block.input ?? {}) : mcp ?? name;
+      tools.set(block.id, { done: verbs[1], parameter });
+      out.push(action(verbs[0], parameter, null, true));
+    } else if (block?.type === "tool_result" && tools.has(block.tool_use_id)) {
+      const call = tools.get(block.tool_use_id);
+      tools.delete(block.tool_use_id);
+      out.push(action(call.done, call.parameter, `${block.is_error ? "failed\n" : ""}${resultText(block.content)}` || "completed"));
+    }
+  }
+  return out;
+}
+
+/** The agent's own todo list, from either CLI, as plan steps; null when the event has none. */
+export function agentPlan(event) {
+  const item = event?.item;
+  if (item?.type === "todo_list" && Array.isArray(item.items))
+    return item.items.slice(0, 50).map((step) => ({ content: clip(step?.text, 500), status: step?.completed ? "completed" : "pending" }));
+  if (event?.type !== "assistant" || !Array.isArray(event.message?.content)) return null;
+  const todo = event.message.content.findLast((block) => block?.type === "tool_use" && block.name === "TodoWrite");
+  if (!Array.isArray(todo?.input?.todos)) return null;
+  const status = { pending: "pending", in_progress: "inProgress", completed: "completed" };
+  return todo.input.todos.slice(0, 50).map((step) => ({ content: clip(step?.content, 500), status: status[step?.status] ?? "pending" }));
+}

@@ -13,6 +13,7 @@ import { planLinkForBody, reconcileEpics, resumeStalePlans } from '@/lib/collab-
 import { LABELS } from '@/lib/brand';
 import { approvalHistory, staleApproval } from '@/lib/approval';
 import { syncPullRequests } from '@/lib/pull-request-sync';
+import { retryFrom } from '@/lib/run-retry';
 
 /** One durable lease covers cron and manual checks. Interrupted checks can resume after expiry. */
 export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' = 'pickup') {
@@ -134,7 +135,7 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
         summary: `Checking up to ${candidates.length} tickets for available agents.` }).where(held());
       await dispatchAssignments(candidates.map((row) => row.ticket), idle, capacity, 4, async (ticket, agent) => {
           if (Date.now() > deadline || !(await stillEnabled())) return false;
-          const project = candidates.find((candidate) => candidate.ticket.id === ticket.id)!.project;
+          const { project, retryOf } = candidates.find((candidate) => candidate.ticket.id === ticket.id)!;
           const installation = boards.find((board) => board.project.id === project.id)?.installation;
           if (!installation) return false;
           try {
@@ -152,7 +153,7 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
             const stale = staleApproval(await approvalHistory(client.graphql, owner, repo, ticket.githubIssueNumber), [settings.label, LABELS.plan]);
             if (stale) throw new Error(`${project.repoFullName}#${ticket.githubIssueNumber}: ${stale}`);
             await startCodexRun(ticket.id, agent.id, agent.modelId ?? 'codex-default', settings.userId,
-              { automationLabel: settings.label, automationLeaseId: leaseId });
+              { automationLabel: settings.label, automationLeaseId: leaseId }, undefined, retryOf ? retryFrom(retryOf) : undefined);
             runsStarted++;
             await db.update(automation).set({ runsStarted: sql`${automation.runsStarted} + 1`, updatedAt: new Date() }).where(held()).catch(() => {});
             return true;

@@ -7,6 +7,7 @@ import { runWaitReason } from '@/lib/run-wait';
 import { runLeased } from '@/lib/codex/accounts';
 import type { WorkCard } from '@/lib/work-board';
 import { sessionState, type SessionState } from '@/lib/run-session';
+import { isFollowUp } from '@/lib/run-retry';
 
 /** One malformed labels row must not break the whole board. */
 function parseLabels(labels: string | null): string[] {
@@ -61,6 +62,7 @@ export async function workBoardCards(ticketId?: string): Promise<(WorkCard & { s
       runOutcome: run && run.status !== 'running' ? lastLine(run.log) : null,
       blockedBy: blocks.filter((block) => block.ticketId === ticket.id).map((block) => block.number),
       sessionState: run ? sessionState(run, type ? { type, createdAt: new Date(Number(at)) } : null, now) : null,
+      runAttempt: run?.attempt ?? 1, runFailureKind: run?.failureKind ?? null, runFollowUp: !!run && isFollowUp(run),
     };
   });
 }

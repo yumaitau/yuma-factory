@@ -21,6 +21,7 @@ import { claimRun, reconcileAbandonedClaims } from '@/lib/run-lifecycle';
 import { parsePlan } from '@/lib/plan';
 import { recordPrompt } from '@/lib/run-activities';
 import { ACTIVITY_LIMITS } from '@/lib/run-session';
+import { failureKind, type RetryRequest } from '@/lib/run-retry';
 
 export async function startCodexRun(
   ticketId: string,
@@ -30,6 +31,8 @@ export async function startCodexRun(
   options?: { automationLabel: string; automationLeaseId: string },
   // A follow-up continues a finished run: same ticket, its branch and PR when still open, plus the prompt.
   followUp?: { parentRunId: string; branchName: string | null; prompt: string },
+  // An automatic retry of a failed run: the same shape, with that run's failure in place of a prompt.
+  retry?: RetryRequest,
 ) {
   if (!validModel(modelId))
     throw new Error("Choose a model or the subscription default.");
@@ -53,16 +56,18 @@ export async function startCodexRun(
     agentPrompt: agent.systemPrompt, memoryBlock: memory.block,
     epic: epic?.epic, siblings: epic?.siblings, thread: epic?.thread,
     followUp: followUp && { body: followUp.prompt, continuing: !!followUp.branchName },
+    retry: retry && { attempt: retry.attempt, failure: retry.failure, continuing: !!retry.branchName },
   });
   const runId = newId("run");
-  const branchName = followUp?.branchName ?? `factory/ticket-${context.ticket.githubIssueNumber}-${runId.slice(-8)}`;
+  const continued = followUp ?? retry;
+  const branchName = continued?.branchName ?? `factory/ticket-${context.ticket.githubIssueNumber}-${runId.slice(-8)}`;
   // A pinned provider keeps a provider-specific model off the other CLI.
   const account = await claimAccount(userId, runId, db, isProvider(agent.provider) ? agent.provider : null);
   let inserted = false;
   let dispatched = false;
   try {
     if (!await claimRun(db, { id: runId, ticketId, agentId, userId, accountId: account.id, modelId, mode,
-      branchName, parentRunId: followUp?.parentRunId }, options))
+      branchName, parentRunId: continued?.parentRunId, attempt: retry?.attempt }, options))
       throw new Error('Ticket or agent is already busy, completed, blocked or unavailable.');
     inserted = true;
     // Usage tracking is advisory; it must never block a run from starting.
@@ -76,7 +81,7 @@ export async function startCodexRun(
       defaultBranch: context.project.defaultBranch,
       branchName,
       // An existing branch normally means recovery, which skips coding; a follow-up still codes.
-      followUp: !!followUp?.branchName,
+      followUp: !!continued?.branchName,
       githubToken,
       model: modelId === "codex-default" ? undefined : modelId,
       mode,
@@ -247,6 +252,7 @@ export async function completeCodexRun(runId: string, result: RunResult) {
           ? `${result.log.slice(0, 100_000 - completionNote.length - 1)}\n${completionNote}`
           : result.log.slice(0, 100000),
         pullRequestUrl: result.pullRequestUrl ?? run.pullRequestUrl,
+        failureKind: failureKind(result, run.mode),
         inputTokens: result.inputTokens ?? 0,
         outputTokens: result.outputTokens ?? 0,
         finishedAt: new Date(),

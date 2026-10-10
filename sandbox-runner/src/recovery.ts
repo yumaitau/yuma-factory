@@ -18,6 +18,8 @@ export type DurableJob = {
   accountId: string;
   request: RunRequest;
   attempt: number;
+  // Restarts after a started attempt failed or died; start failures (outages) do not count.
+  restarts?: number;
   retryAt?: number;
   leaseUntil?: number;
   progress?: RunResult;
@@ -32,6 +34,8 @@ type Operations = {
 };
 // Codex is killed after 45 minutes, so a coding phase silent this long has lost its supervisor.
 export const SILENT_CODING_MS = 60 * 60_000;
+// Past this, the failure goes to Factory, which applies its own retry budget with the failure in the prompt.
+export const MAX_RUNNER_RESTARTS = 3;
 export const retryDelay = (attempt: number) => Math.min(15 * 60_000, 60_000 * 2 ** Math.min(Math.max(attempt - 1, 0), 4));
 
 /** Optional evidence/credential reads must not prevent stopping an unhealthy sandbox. */
@@ -154,7 +158,15 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
         return waiting();
       }
       await ops.pause?.(state.result);
+      if (!job.retryAt && (job.restarts ?? 0) >= MAX_RUNNER_RESTARTS) {
+        job.terminalResult = {
+          ...job.progress, ...state.progress, ...state.result, status: 'failed',
+          log: `${state.result?.log ?? state.progress?.log ?? job.progress?.log ?? 'Runner interrupted.'}\nStopped after ${MAX_RUNNER_RESTARTS} automatic restarts. Existing branch and PR preserved.`,
+        };
+        return job.terminalResult;
+      }
       if (!job.retryAt) {
+        job.restarts = (job.restarts ?? 0) + 1;
         job.retryAt = now + retryDelay(job.attempt);
         job.progress = {
           ...state.result, ...state.progress, status: 'running',

@@ -158,7 +158,7 @@ export function SessionCard({ session, agent, authorName, expanded = true, onTog
   }
   const who = <><AgentAvatar name={agent?.name ?? null} color={agent?.color} live={state === 'active'} />
     <span className="truncate font-medium">{name}</span>
-    {continuation && <span className="text-xs font-normal text-muted-foreground">Follow-up</span>}</>;
+    {continuation && <span className="text-xs font-normal text-muted-foreground">{run.attempt > 1 ? `Retry ${run.attempt - 1}` : 'Follow-up'}</span>}</>;
   return <section aria-label={`${name} session`} className="rounded-lg border border-border bg-card shadow-[0_1px_2px_rgb(28_25_23/0.04)]">
     <header className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2.5 text-[13px]">
       {onToggle ? <button type="button" aria-expanded={expanded} onClick={onToggle}

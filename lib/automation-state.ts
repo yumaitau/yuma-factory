@@ -7,7 +7,7 @@ import { newId } from '@/lib/ids';
 import { runWaitReason } from '@/lib/run-wait';
 import { availableAccounts, runLeased } from '@/lib/codex/accounts';
 import { LABELS } from '@/lib/brand';
-import { planReady } from '@/lib/run-lifecycle';
+import { planReady, retryDue } from '@/lib/run-lifecycle';
 
 export const AUTOMATION_ID = 'github';
 
@@ -46,8 +46,9 @@ export async function claimAutomation(db: Db, leaseId: string, now = new Date())
 
 export async function automationCandidates(db: Db, agentId: string | string[], label: string, limit = 200) {
   const agentIds = typeof agentId === 'string' ? [agentId] : agentId;
-  return db.select({ ticket: tickets, project: projects }).from(tickets)
+  const rows = await db.select({ ticket: tickets, project: projects, latest: runs }).from(tickets)
     .innerJoin(projects, eq(tickets.projectId, projects.id))
+    .leftJoin(runs, sql`${runs.id} = (select latest.id from runs latest where latest.ticket_id = ${tickets.id} order by latest.created_at desc, latest.id desc limit 1)`)
     .where(and(
       eq(projects.status, 'active'), eq(tickets.githubState, 'open'), planReady(),
       or(eq(tickets.stage, 'intake'), eq(tickets.stage, 'assigned')),
@@ -56,10 +57,17 @@ export async function automationCandidates(db: Db, agentId: string | string[], l
       sql`exists (select 1 from json_each(case when json_valid(${tickets.labels}) then ${tickets.labels} else '[]' end) where lower(value) in (lower(${label}), ${LABELS.plan}))`,
       // Subtasks wait until every ticket they build on is closed.
       sql`not exists (select 1 from ticket_dependencies d join tickets blocker on blocker.id = d.depends_on_ticket_id where d.ticket_id = ${tickets.id} and blocker.github_state = 'open')`,
-      // A failed attempt needs human review; a successful attempt must not make a second PR.
-      // A human requeue clears earlier attempts.
-      sql`not exists (select 1 from ${runs} where ${runs.ticketId} = ${tickets.id} and (${tickets.requeuedAt} is null or ${runs.createdAt} >= ${tickets.requeuedAt}))`,
+      // A successful attempt must not make a second PR, and a failure is retried only while its
+      // budget lasts (lib/run-retry.ts). A human requeue clears earlier attempts.
+      or(
+        sql`not exists (select 1 from runs r where r.ticket_id = ${tickets.id} and (${tickets.requeuedAt} is null or r.created_at >= ${tickets.requeuedAt}))`,
+        retryDue(),
+      ),
     )).orderBy(asc(tickets.dispatchCheckedAt), asc(tickets.createdAt), asc(tickets.id)).limit(limit).all();
+  // Any run since the requeue on a candidate is the failed run to retry.
+  return rows.map(({ ticket, project, latest }) => ({
+    ticket, project, retryOf: latest && !(ticket.requeuedAt && ticket.requeuedAt > latest.createdAt) ? latest : null,
+  }));
 }
 
 export async function automationStatus() {

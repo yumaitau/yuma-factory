@@ -249,6 +249,10 @@ export const runs = sqliteTable(
     parentRunId: text("parent_run_id"),
     // Agent's latest plan, replaced wholesale: JSON [{content, status: pending|inProgress|completed|canceled}].
     plan: text("plan"),
+    // 1 for a fresh attempt; an automatic retry is its failed parent's attempt + 1.
+    attempt: integer("attempt").notNull().default(1),
+    // Set when a run fails: retry | retry_once | human (lib/run-retry.ts).
+    failureKind: text("failure_kind"),
   },
   (table) => [
     index("runs_ticket_idx").on(table.ticketId),

@@ -3,18 +3,33 @@ import { and, eq, sql } from 'drizzle-orm';
 import { agents, runs, tickets } from '@/db/schema';
 import { LABELS } from '@/lib/brand';
 import type { Db, TicketStage } from '@/lib/queries';
+import { FAILURE_KINDS, RETRY_BACKOFF_MINUTES, RETRY_BUDGET } from '@/lib/run-retry';
 
 /** Applying plans are not runnable until all dependency edges have been saved. */
 export const planReady = () => sql`(${tickets.planTask} is null or exists (
   select 1 from plans p where p.id = substr(${tickets.planTask}, 1, instr(${tickets.planTask}, ':') - 1)
   and p.status = 'applied'))`;
 
+/**
+ * SQL twin of nextRetry() for a `runs` row in scope: a failed run since the ticket's requeue
+ * watermark, not a person's follow-up, within its retry budget and past its backoff.
+ */
+export function retryDue() {
+  const budget = sql.join(FAILURE_KINDS.map((kind) => sql`when ${kind} then ${RETRY_BUDGET[kind]}`), sql` `);
+  const delay = sql.join(RETRY_BACKOFF_MINUTES.map((minutes, index) => sql`when ${index + 1} then ${minutes * 60}`), sql` `);
+  return sql`(${runs.status} = 'failed'
+    and (${tickets.requeuedAt} is null or ${runs.createdAt} >= ${tickets.requeuedAt})
+    and not (${runs.parentRunId} is not null and ${runs.attempt} = 1)
+    and ${runs.attempt} <= (case ${runs.failureKind} ${budget} else 0 end)
+    and ${runs.finishedAt} <= unixepoch() - (case ${runs.attempt} ${delay} else ${RETRY_BACKOFF_MINUTES.at(-1)! * 60} end))`;
+}
+
 /** One transaction creates the run and claims both resources, or changes neither. */
 export async function claimRun(db: Db, input: {
   id: string; ticketId: string; agentId: string; userId: string; accountId: string;
-  modelId: string; mode: 'implement' | 'plan'; branchName?: string; parentRunId?: string;
+  modelId: string; mode: 'implement' | 'plan'; branchName?: string; parentRunId?: string; attempt?: number;
 }, options?: { automationLabel: string; automationLeaseId: string }) {
-  const { id, ticketId, agentId, userId, accountId, modelId, mode, branchName = null, parentRunId = null } = input;
+  const { id, ticketId, agentId, userId, accountId, modelId, mode, branchName = null, parentRunId = null, attempt = 1 } = input;
   const eligible = and(
     eq(tickets.id, ticketId), eq(tickets.githubState, 'open'),
     sql`${tickets.stage} in ('intake', 'assigned', 'review')`,
@@ -27,7 +42,12 @@ export async function claimRun(db: Db, input: {
     ...(options ? [
       sql`${tickets.stage} in ('intake', 'assigned')`,
       sql`(${tickets.assignedAgentId} is null or ${tickets.assignedAgentId} = ${agentId})`,
-      sql`not exists (select 1 from runs r where r.ticket_id = ${ticketId} and (${tickets.requeuedAt} is null or r.created_at >= ${tickets.requeuedAt}))`,
+      // A fresh attempt needs no runs since the requeue; a retry needs its failed parent to be the latest, and due.
+      attempt > 1 && parentRunId
+        ? sql`exists (select 1 from runs where runs.id = ${parentRunId} and runs.ticket_id = ${ticketId} and runs.attempt = ${attempt - 1}
+          and runs.id = (select latest.id from runs latest where latest.ticket_id = ${ticketId} order by latest.created_at desc, latest.id desc limit 1)
+          and ${retryDue()})`
+        : sql`not exists (select 1 from runs r where r.ticket_id = ${ticketId} and (${tickets.requeuedAt} is null or r.created_at >= ${tickets.requeuedAt}))`,
       sql`exists (select 1 from json_each(case when json_valid(${tickets.labels}) then ${tickets.labels} else '[]' end) where lower(value) in (lower(${options.automationLabel}), ${LABELS.plan}))`,
       sql`exists (select 1 from automation a join agents worker on worker.id = ${agentId} where a.id = 'github' and a.enabled = 1 and a.user_id = ${userId} and a.lease_id = ${options.automationLeaseId} and a.lease_until > unixepoch() and worker.owner_user_id = a.user_id and worker.automation_slot between 1 and a.target_agents)`,
     ] : []),
@@ -39,7 +59,7 @@ export async function claimRun(db: Db, input: {
     db.insert(runs).select(sql`select
       ${id}, ${ticketId}, ${agentId}, 'running', null, ${accountId}, ${userId},
       ${modelId}, ${mode}, '', null, null, null, null, 0, 0, ${createdAt}, null, ${createdAt},
-      ${branchName}, ${parentRunId}, null
+      ${branchName}, ${parentRunId}, null, ${attempt}, null
       from ${tickets} where ${eligible}`).returning({ id: runs.id }),
     db.update(agents).set({ status: 'working', updatedAt: new Date() }).where(and(eq(agents.id, agentId), ownsRun)),
     db.update(tickets).set({ stage: 'in_progress', assignedAgentId: agentId, updatedAt: new Date() })

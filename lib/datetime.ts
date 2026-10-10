@@ -31,6 +31,12 @@ export function sydneyParts(value: Date = new Date()) {
   };
 }
 
+/** Sydney wall-clock time as HH:MM, for times within the day such as a scheduled retry. */
+export function formatSydneyTime(value: Date): string {
+  const { hour, minute } = sydneyParts(value);
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
 export function sydneyCalendarDate(value: Date = new Date()): string {
   return sydneyParts(value).date;
 }

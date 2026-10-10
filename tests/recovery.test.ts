@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recoverJob, retryDelay, type DurableJob } from '../sandbox-runner/src/recovery';
+import { MAX_RUNNER_RESTARTS, recoverJob, retryDelay, type DurableJob } from '../sandbox-runner/src/recovery';
 import type { RunResult } from '../shared/codex';
 
 const request = { accountId: 'account', repoFullName: 'owner/repo', defaultBranch: 'main', branchName: 'factory/ticket-1', prompt: 'Fix bug', prTitle: 'Fix bug', issueNumber: 1 };
@@ -354,4 +354,31 @@ test('an unresponsive sandbox is treated as interrupted instead of holding the l
   assert.ok(f.job().retryAt);
   assert.equal(f.job().leaseUntil, undefined);
   assert.match(f.job().progress?.log ?? '', /stopped responding/);
+});
+
+test('a run that keeps failing restarts at most three times, then fails for Factory to decide', async () => {
+  const f = fixture(1);
+  let started = 0, stopped = 0;
+  const failed: RunResult = { status: 'failed', log: 'Agent crashed', pullRequestUrl: 'https://github.com/owner/repo/pull/1' };
+  const ops = {
+    inspect: async () => ({ running: false, result: failed, progress: null }),
+    start: async () => { started++; },
+    pause: async () => { stopped++; },
+  };
+  let now = 1000;
+  for (let restart = 1; restart <= MAX_RUNNER_RESTARTS; restart++) {
+    assert.equal((await recoverJob(f.bucket, 'run', 'account', ops, now)).status, 'running');
+    assert.equal(f.job().restarts, restart);
+    now = f.job().retryAt!;
+    await recoverJob(f.bucket, 'run', 'account', ops, now);
+  }
+  assert.equal(started, MAX_RUNNER_RESTARTS);
+  const result = await recoverJob(f.bucket, 'run', 'account', ops, now + 1);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.retryable, undefined);
+  assert.equal(result.pullRequestUrl, failed.pullRequestUrl);
+  assert.match(result.log, /Stopped after 3 automatic restarts/);
+  assert.deepEqual(await recoverJob(f.bucket, 'run', 'account', ops, now + 2), result);
+  assert.equal(started, MAX_RUNNER_RESTARTS);
+  assert.ok(stopped > 0);
 });

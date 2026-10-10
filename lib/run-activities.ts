@@ -75,7 +75,7 @@ export async function getRunSession(db: Db, runId: string, after = 0, now = Date
       id: run.id, ticketId: run.ticketId, agentId: run.agentId, status: run.status, mode: run.mode, modelId: run.modelId,
       requestedByUserId: run.requestedByUserId, waitingReason: run.waitingReason,
       pullRequestUrl: run.pullRequestUrl?.startsWith('https://github.com/') ? run.pullRequestUrl : null,
-      pullRequestState: run.pullRequestState, branchName: run.branchName, parentRunId: run.parentRunId,
+      pullRequestState: run.pullRequestState, branchName: run.branchName, parentRunId: run.parentRunId, attempt: run.attempt,
       createdAt: run.createdAt.toISOString(), startedAt: run.startedAt?.toISOString() ?? null, finishedAt: run.finishedAt?.toISOString() ?? null,
     },
     state,

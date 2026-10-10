@@ -100,6 +100,12 @@ export async function listMemories(db: Db, filter: { projectId?: string | null; 
     .orderBy(desc(memories.pinned), desc(memories.weight), desc(memories.updatedAt)).limit(500).all();
 }
 
+/** Memories per scope and status, for the scope picker and status tabs. */
+export async function memoryCounts(db: Db) {
+  return db.select({ projectId: memories.projectId, status: memories.status, count: sql<number>`count(*)` })
+    .from(memories).groupBy(memories.projectId, memories.status).all();
+}
+
 export async function memoryHistory(db: Db, memoryIds: string[]) {
   if (!memoryIds.length) return [];
   const rows = [];

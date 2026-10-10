@@ -1,29 +1,29 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
-import { Suspense } from 'react';
+import { Suspense, type ReactNode } from 'react';
 
-import { createMemoryAction, memorySettingsAction, revertMemoryAction, updateMemoryAction } from '@/app/actions/memory';
+import { memorySettingsAction } from '@/app/actions/memory';
 import { AppShell } from '@/components/factory/app-shell';
+import { MemoryList, ScopePicker, type MemoryGroup, type MemoryItem } from '@/components/factory/memory-list';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { formatSydneyDateTime } from '@/lib/datetime';
 import { getDb } from '@/lib/db';
-import { MEMORY_KINDS, memoryScore } from '@/lib/memory';
-import { listMemories, memoriesForTicket, memoryHistory } from '@/lib/memory-store';
+import { listMemories, memoriesForTicket, memoryCounts, memoryHistory, type Memory } from '@/lib/memory-store';
+import { ALL_PROJECTS, memoryInclusion, scopeOptions, selectionSize, statusCounts } from '@/lib/memory-view';
 import { listProjects } from '@/lib/queries';
 import { requireSession } from '@/lib/session';
+import { cn } from '@/lib/utils';
 
 export const metadata = { title: 'Memory' };
 
 type Search = { project?: string; status?: string; q?: string };
 const STATUSES = [
   { id: 'active', label: 'Active' },
-  { id: 'suggested', label: 'Suggested' },
+  { id: 'suggested', label: 'Needs review' },
   { id: 'archived', label: 'Archived' },
-];
-const field = 'rounded-md border border-border bg-background px-3 py-2 text-sm';
+] as const;
+const panel = 'rounded-md border border-border bg-card p-3 text-[13px] shadow-[0_1px_2px_rgb(28_25_23/0.04)]';
+const summary = 'cursor-pointer select-none font-medium marker:text-muted-foreground';
 
 export default function MemoryPage({ searchParams }: { searchParams: Promise<Search> }) {
   return (
@@ -40,183 +40,177 @@ async function MemoryView({ searchParams }: { searchParams: Promise<Search> }) {
   const db = await getDb();
   const projects = await listProjects();
   const project = projects.find((item) => item.id === search.project) ?? null;
-  const status = STATUSES.some((item) => item.id === search.status) ? search.status! : 'active';
+  const status = STATUSES.find((item) => item.id === search.status)?.id ?? 'active';
+  const counts = await memoryCounts(db);
+  const shared = statusCounts(counts, null);
+  const tabs = statusCounts(counts, project?.id ?? null);
+  const options = scopeOptions(projects, counts);
   const rows = await listMemories(db, { projectId: project?.id ?? null, status });
+  const inherited = project && status === 'active' ? await listMemories(db, { projectId: null, status: 'active' }) : [];
   const events = await memoryHistory(db, rows.map((row) => row.id));
+  // What a ticket with nothing relevant in it receives, ranked exactly as runs rank it.
+  const typical = project ? await memoriesForTicket(db, project.id, '') : null;
   const preview = project && search.q !== undefined ? await memoriesForTicket(db, project.id, search.q) : null;
+  const included = typical ? new Set(typical.selected.map((memory) => memory.id)) : undefined;
+  const item = (memory: Memory): MemoryItem => ({
+    ...memory,
+    scope: memory.projectId ? project?.repoFullName ?? memory.projectId : ALL_PROJECTS,
+    inclusion: memoryInclusion(memory, included),
+    history: events.filter((event) => event.memoryId === memory.id),
+  });
+  const reviewing = options.filter((option) => option.review > 0);
+  const scopeLabel = project?.repoFullName ?? ALL_PROJECTS;
   const href = (next: Partial<Search>) => {
     const params = new URLSearchParams();
     const merged = { project: project?.id, status, ...next };
-    for (const [key, value] of Object.entries(merged)) if (value) params.set(key, value);
-    return `/memory?${params}`;
+    for (const [key, value] of Object.entries(merged)) if (value && !(key === 'status' && value === 'active')) params.set(key, value);
+    return params.size ? `/memory?${params}` : '/memory';
   };
+  const reviewLinks = reviewing.length ? <span className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1">
+    {reviewing.map((option) => <Link key={option.id} href={`/memory?project=${encodeURIComponent(option.id)}&status=suggested`} className="text-primary hover:underline">
+      {option.name} ({option.review})</Link>)}
+  </span> : null;
+
+  const groups: MemoryGroup[] = status === 'active'
+    ? project
+      ? [
+          { id: 'project', title: 'This project', hint: `Only runs on ${project.repoFullName} use these.`, items: rows.map(item),
+            empty: `No memories for ${project.repoFullName} yet. Add one, or agents will propose learnings after their runs.` },
+          { id: 'shared', title: 'From all projects', hint: <>Also applied here. Edit them in <Link href="/memory" className="underline hover:text-foreground">{ALL_PROJECTS}</Link>.</>,
+            items: inherited.map(item), inherited: true, empty: 'No memories are shared by every project yet.' },
+        ]
+      : [{ id: 'shared', title: 'Shared by every project', hint: 'Runs on every project can use these, alongside the project\'s own memories.', items: rows.map(item),
+          empty: 'Nothing applies to every project yet. Add conventions that hold across all repositories, such as the package manager or review rules.' }]
+    : status === 'suggested'
+      ? [{ id: 'review', title: 'Waiting for your review',
+          hint: 'Agents proposed these after their runs. Runs ignore them until you accept one; dismissing archives it.', items: rows.map(item),
+          empty: project
+            ? project.autoLearn
+              ? 'Nothing to review. This project uses agent learnings right away; turn that off in Project settings to review them first.'
+              : 'Nothing to review. New agent learnings for this project will wait here.'
+            : <>Agent learnings always belong to one project.{reviewLinks ? <> These projects have learnings waiting:{reviewLinks}</> : ' No project has learnings waiting.'}</> }]
+      : [{ id: 'archived', title: 'Archived', hint: 'Never sent to agents. Restore one to use it again.', items: rows.map(item),
+          empty: 'Nothing archived. Agent learnings that keep failing runs are archived here automatically.' }];
 
   return (
     <AppShell email={session.user.email}>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold">Memory</h1>
-        <p className="text-sm text-muted-foreground">
-          What agents know about your software. Relevant memories go into each run prompt, ranked by weight, outcomes and relevance.
-          Agents add low-weight learnings after runs. Memories used by runs that reach green CI gain score, and memories used by failed runs lose it.
-        </p>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 max-w-2xl">
+          <h1 className="text-2xl font-semibold">Memory</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Notes agents read before each run. A run gets the memories shared by all projects plus its own project&apos;s:
+            pinned ones always, the rest ranked by relevance until the project&apos;s memory budget is full.
+          </p>
+        </div>
+        <ScopePicker current={project?.id ?? null} options={options} sharedCount={shared.active} />
       </div>
 
-      <nav className="mb-4 flex flex-wrap gap-2" aria-label="Scope">
-        <ScopeLink href={href({ project: undefined, q: undefined })} active={!project}>Global</ScopeLink>
-        {projects.map((item) => (
-          <ScopeLink key={item.id} href={href({ project: item.id, q: undefined })} active={project?.id === item.id}>{item.repoFullName}</ScopeLink>
-        ))}
+      <nav aria-label="Status" className="mb-4 flex gap-5 border-b border-border">
+        {STATUSES.map((item) => {
+          const count = tabs[item.id];
+          const current = status === item.id;
+          return <Link key={item.id} href={href({ status: item.id, q: undefined })} aria-current={current ? 'page' : undefined}
+            className={cn('-mb-px flex items-center gap-1.5 border-b-2 pb-2 text-[13px] transition-colors',
+              current ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
+            {item.label}
+            {item.id === 'suggested' && count > 0
+              ? <span className="rounded-full bg-primary px-1.5 text-[11px] font-medium leading-4 text-primary-foreground">{count}</span>
+              : <span className="font-normal tabular-nums text-muted-foreground">{count}</span>}
+          </Link>;
+        })}
       </nav>
 
-      {project ? (
-        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card>
-            <h2 className="mb-3 text-lg font-semibold">Tuning</h2>
-            <form action={memorySettingsAction} className="flex flex-col gap-3">
-              <input type="hidden" name="projectId" value={project.id} />
-              <div className="flex flex-col gap-1">
-                <Label htmlFor="memory-budget">Memory budget per run (characters)</Label>
-                <Input id="memory-budget" name="memoryBudget" type="number" min={0} max={20000} step={500} defaultValue={project.memoryBudget} />
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" name="autoLearn" defaultChecked={project.autoLearn} />
-                Activate agent learnings automatically (otherwise they wait in Suggested)
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" name="autoApprovePlans" defaultChecked={project.autoApprovePlans} />
-                Apply planner breakdowns without approval
-              </label>
-              <div><Button type="submit" variant="outline" size="sm">Save tuning</Button></div>
-            </form>
-          </Card>
-          <Card>
-            <h2 className="mb-3 text-lg font-semibold">Preview</h2>
-            <form action="/memory" className="flex gap-2">
-              <input type="hidden" name="project" value={project.id} />
-              <input type="hidden" name="status" value={status} />
-              <Input name="q" placeholder="Ticket title or description" defaultValue={search.q ?? ''} />
-              <Button type="submit" variant="outline" size="sm">Preview</Button>
-            </form>
-            {preview ? (
-              <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
-                {preview.block || 'No memory would be injected.'}
-              </pre>
-            ) : (
-              <p className="mt-3 text-sm text-muted-foreground">Shows the exact memory block a ticket like this would receive, including global memory.</p>
-            )}
-          </Card>
-        </div>
-      ) : null}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <MemoryList key={`${project?.id ?? 'global'}:${status}`} groups={groups} scope={{ projectId: project?.id ?? null, label: scopeLabel }} canAdd={status === 'active'} />
 
-      <Card className="mb-6">
-        <h2 className="mb-3 text-lg font-semibold">Teach {project ? project.repoFullName : 'every project'}</h2>
-        <form action={createMemoryAction} className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-          <input type="hidden" name="projectId" value={project?.id ?? 'global'} />
-          <div className="flex flex-col gap-1 sm:col-span-4">
-            <Label htmlFor="memory-content">Memory</Label>
-            <textarea id="memory-content" name="content" rows={2} required minLength={3} maxLength={2000} className={field}
-              placeholder="e.g. Run pnpm test:e2e only after pnpm d1:migrate:local; e2e fails on a fresh checkout otherwise." />
-          </div>
-          <div className="flex flex-col gap-1">
-            <Label htmlFor="memory-kind">Kind</Label>
-            <select id="memory-kind" name="kind" defaultValue="convention" className={field}>
-              {MEMORY_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1">
-            <Label htmlFor="memory-weight">Weight (0-100)</Label>
-            <Input id="memory-weight" name="weight" type="number" min={0} max={100} defaultValue={60} />
-          </div>
-          <label className="flex items-end gap-2 pb-2 text-sm">
-            <input type="checkbox" name="pinned" /> Always include
-          </label>
-          <div className="flex items-end"><Button type="submit">Add memory</Button></div>
-        </form>
-      </Card>
-
-      <nav className="mb-3 flex gap-2" aria-label="Status">
-        {STATUSES.map((item) => (
-          <ScopeLink key={item.id} href={href({ status: item.id })} active={status === item.id}>{item.label}</ScopeLink>
-        ))}
-      </nav>
-
-      {rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No {status} memories here yet.</p>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {rows.map((memory) => (
-            <Card key={memory.id} className="p-4" role="article" aria-label={`${memory.kind} memory`}>
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span className="rounded-full bg-muted px-2 py-0.5 font-medium text-foreground">{memory.kind}</span>
-                {memory.pinned ? <span className="rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">pinned</span> : null}
-                <span>{memory.source === 'human' ? 'from the team' : `learned by agent${memory.sourceRunId ? ' in ' : ''}`}
-                  {memory.sourceRunId ? <Link className="underline" href={`/work/runs/${memory.sourceRunId}`}>this run</Link> : null}</span>
-                <span>· score {memoryScore(memory)} (weight {memory.weight}, {memory.successes} green, {memory.failures} failed, used {memory.uses}×)</span>
-                <span>· updated {formatSydneyDateTime(memory.updatedAt)}</span>
-              </div>
-              <form action={updateMemoryAction} className="flex flex-col gap-2">
-                <input type="hidden" name="memoryId" value={memory.id} />
-                <textarea name="content" rows={2} maxLength={2000} defaultValue={memory.content} className={field} aria-label="Memory content" />
-                <div className="flex flex-wrap items-center gap-2">
-                  <select name="kind" defaultValue={memory.kind} className={field} aria-label="Kind">
-                    {MEMORY_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
-                  </select>
-                  <label className="flex items-center gap-2 text-sm">Weight
-                    <input name="weight" type="range" min={0} max={100} defaultValue={memory.weight} aria-label="Weight" />
-                  </label>
-                  <Button type="submit" variant="outline" size="sm">Save</Button>
-                  <Button type="submit" variant="ghost" size="sm" name="pinned" value={memory.pinned ? 'false' : 'true'}>
-                    {memory.pinned ? 'Unpin' : 'Pin'}
-                  </Button>
-                  {memory.status !== 'active' ? (
-                    <Button type="submit" variant="ghost" size="sm" name="status" value="active">
-                      {memory.status === 'suggested' ? 'Accept' : 'Restore'}
-                    </Button>
-                  ) : null}
-                  {memory.status !== 'archived' ? (
-                    <Button type="submit" variant="ghost" size="sm" name="status" value="archived">Archive</Button>
-                  ) : null}
-                </div>
+        <aside className="flex flex-col gap-3 self-start" aria-label={project ? 'Project memory' : 'About memory'}>
+          {project && typical ? <>
+            <section className={panel} aria-labelledby="run-gets">
+              <h2 id="run-gets" className="font-medium">What a run gets</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                A ticket with nothing specific in it gets <span className="font-medium text-foreground">{typical.selected.length} of {tabs.active + shared.active}</span> active
+                memories, using {selectionSize(typical.selected).toLocaleString('en-AU')} of {project.memoryBudget.toLocaleString('en-AU')} characters.
+              </p>
+              <Meter used={selectionSize(typical.selected)} budget={project.memoryBudget} />
+              <p className="mt-2 text-xs text-muted-foreground">
+                Pinned memories go in first. The rest are ranked by priority, track record and how many words they share with the ticket.
+              </p>
+            </section>
+            <details className={panel} open={!!preview}>
+              <summary className={summary}>Test a ticket</summary>
+              <p className="mt-1 text-xs text-muted-foreground">See which memories a ticket like this would get.</p>
+              <form action="/memory" className="mt-2 flex flex-col gap-2">
+                <input type="hidden" name="project" value={project.id} />
+                {status !== 'active' && <input type="hidden" name="status" value={status} />}
+                <Input name="q" aria-label="Ticket title or description" placeholder="Ticket title or description" defaultValue={search.q ?? ''} className="h-8 text-[13px]" />
+                <Button type="submit" variant="outline" size="sm" className="h-8 rounded-md text-[13px]">Test ticket</Button>
               </form>
-              <History events={events.filter((event) => event.memoryId === memory.id)} />
-            </Card>
-          ))}
-        </div>
-      )}
+              {preview && <Preview selected={preview.selected} block={preview.block} />}
+            </details>
+            <details className={panel}>
+              <summary className={summary}>Project settings</summary>
+              <form action={memorySettingsAction} className="mt-2 flex flex-col gap-3 text-xs">
+                <input type="hidden" name="projectId" value={project.id} />
+                <label className="flex flex-col gap-1 text-muted-foreground">Memory budget per run (characters)
+                  <Input name="memoryBudget" type="number" min={0} max={20000} step={500} defaultValue={project.memoryBudget} className="h-8 text-[13px] text-foreground" />
+                </label>
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" name="autoLearn" defaultChecked={project.autoLearn} className="mt-0.5" />
+                  Use agent learnings right away (otherwise they wait in Needs review)
+                </label>
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" name="autoApprovePlans" defaultChecked={project.autoApprovePlans} className="mt-0.5" />
+                  Apply planner breakdowns without approval
+                </label>
+                <div><Button type="submit" variant="outline" size="sm" className="h-8 rounded-md text-[13px]">Save settings</Button></div>
+              </form>
+            </details>
+          </> : <>
+            <Panel title="How memory is chosen">
+              <p className="mt-1 text-xs text-muted-foreground">
+                Memories here reach every project. Each project adds its own memories and sets its own budget.
+                Pick a project with Scope to see exactly what its runs get, test a ticket, or change its settings.
+              </p>
+            </Panel>
+            {reviewing.length > 0 && <Panel title="Waiting for review">
+              <ul className="mt-1 flex flex-col gap-1 text-xs">
+                {reviewing.map((option) => <li key={option.id} className="flex items-center gap-2">
+                  <Link href={`/memory?project=${encodeURIComponent(option.id)}&status=suggested`} className="min-w-0 flex-1 truncate hover:underline">{option.name}</Link>
+                  <span className="rounded-full bg-primary px-1.5 text-[11px] font-medium leading-4 text-primary-foreground">{option.review}</span>
+                </li>)}
+              </ul>
+            </Panel>}
+          </>}
+        </aside>
+      </div>
     </AppShell>
   );
 }
 
-function ScopeLink({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
-  return (
-    <Link href={href} aria-current={active ? 'page' : undefined}
-      className={`rounded-full border px-3 py-1 text-sm ${active ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>
-      {children}
-    </Link>
-  );
+function Panel({ title, children }: { title: string; children: ReactNode }) {
+  return <section className={panel}><h2 className="font-medium">{title}</h2>{children}</section>;
 }
 
-function History({ events }: { events: Awaited<ReturnType<typeof memoryHistory>> }) {
-  if (!events.length) return null;
-  return (
-    <details className="mt-2 text-xs text-muted-foreground">
-      <summary className="cursor-pointer">History ({events.length})</summary>
-      <ul className="mt-2 flex flex-col gap-1">
-        {events.map((event) => (
-          <li key={event.id} className="flex flex-wrap items-center gap-2">
-            <span>{formatSydneyDateTime(event.createdAt)}</span>
-            <span className="font-medium text-foreground">{event.action}</span>
-            <span>by {event.actor}</span>
-            {event.after ? <code className="wrap-anywhere">{event.after}</code> : null}
-            {event.before ? (
-              <form action={revertMemoryAction}>
-                <input type="hidden" name="eventId" value={event.id} />
-                <button type="submit" className="underline">Revert</button>
-              </form>
-            ) : null}
-          </li>
-        ))}
-      </ul>
+function Meter({ used, budget }: { used: number; budget: number }) {
+  const share = budget > 0 ? Math.min(1, used / budget) : 1;
+  return <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" role="img" aria-label={`${Math.round(share * 100)}% of the budget used`}>
+    <div className="h-full rounded-full bg-primary/70" style={{ width: `${share * 100}%` }} />
+  </div>;
+}
+
+function Preview({ selected, block }: { selected: Memory[]; block: string }) {
+  if (!selected.length) return <p className="mt-2 text-xs text-muted-foreground">No memory would be sent with this ticket.</p>;
+  return <div className="mt-2">
+    <p className="text-xs text-muted-foreground">{selected.length} {selected.length === 1 ? 'memory' : 'memories'}, {selectionSize(selected).toLocaleString('en-AU')} characters:</p>
+    <ol aria-label="Memories for this ticket" className="mt-1 flex flex-col gap-1 text-xs">
+      {selected.map((memory) => <li key={memory.id} className="flex gap-1.5">
+        <span className="shrink-0 text-muted-foreground">{memory.projectId ? 'Project' : 'Shared'} ·</span>
+        <span className="line-clamp-2 wrap-anywhere">{memory.content}</span>
+      </li>)}
+    </ol>
+    <details className="mt-2 text-xs">
+      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Exact prompt text</summary>
+      <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 text-[11px]">{block}</pre>
     </details>
-  );
+  </div>;
 }

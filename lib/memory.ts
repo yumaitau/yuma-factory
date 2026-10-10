@@ -43,6 +43,11 @@ export function memoryScore(memory: Pick<RankableMemory, 'weight' | 'successes' 
   return memory.weight + 8 * memory.successes - 12 * memory.failures;
 }
 
+/** Characters a memory takes from a run's budget. */
+export function memoryCost(memory: Pick<RankableMemory, 'kind' | 'content'>) {
+  return memory.content.length + memory.kind.length + 4;
+}
+
 function terms(text: string) {
   return new Set(text.toLowerCase().match(/[a-z0-9_]{4,}/g) ?? []);
 }
@@ -62,7 +67,7 @@ export function rankMemories<T extends RankableMemory>(memories: T[], ticketText
   let used = 0;
   for (const { memory, score } of scored) {
     if (!memory.pinned && score <= 0) continue;
-    const cost = memory.content.length + memory.kind.length + 4;
+    const cost = memoryCost(memory);
     if (used + cost > budget) continue;
     selected.push(memory);
     used += cost;

@@ -1,5 +1,6 @@
 import { connection } from 'next/server';
 import { Suspense } from 'react';
+import { PageLoading } from '@/components/factory/page-loading';
 
 import { AppShell } from '@/components/factory/app-shell';
 import { CreateAgentForm } from '@/components/factory/create-agent-form';
@@ -11,7 +12,7 @@ export const metadata = { title: 'Agents' };
 
 export default function AgentsPage() {
   return (
-    <Suspense fallback={<p className="p-6 text-sm text-muted-foreground">Loading agents…</p>}>
+    <Suspense fallback={<PageLoading label="Loading agents…" />}>
       <Agents />
     </Suspense>
   );

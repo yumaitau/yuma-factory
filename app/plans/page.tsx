@@ -1,5 +1,6 @@
 import { connection } from 'next/server';
 import { Suspense } from 'react';
+import { PageLoading } from '@/components/factory/page-loading';
 
 import { decidePlanAction, postTeamMessageAction } from '@/app/actions/memory';
 import { AppShell } from '@/components/factory/app-shell';
@@ -16,7 +17,7 @@ export const metadata = { title: 'Plans' };
 
 export default function PlansPage() {
   return (
-    <Suspense fallback={<p className="p-6 text-sm text-muted-foreground">Loading plans…</p>}>
+    <Suspense fallback={<PageLoading label="Loading plans…" />}>
       <Plans />
     </Suspense>
   );

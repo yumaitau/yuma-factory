@@ -1,5 +1,6 @@
 import { connection } from "next/server";
 import { Suspense } from "react";
+import { PageLoading } from "@/components/factory/page-loading";
 import { AppShell } from "@/components/factory/app-shell";
 import { CodexPool } from "@/components/factory/codex-pool";
 import { visibleAccounts } from "@/lib/codex/accounts";
@@ -7,7 +8,7 @@ import { requireSession } from "@/lib/session";
 export const metadata = { title: "Subscriptions" };
 export default function PoolPage() {
   return (
-    <Suspense fallback={<p className="p-6">Loading subscriptions…</p>}>
+    <Suspense fallback={<PageLoading label="Loading subscriptions…" />}>
       <Pool />
     </Suspense>
   );

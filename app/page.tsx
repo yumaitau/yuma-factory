@@ -1,5 +1,6 @@
 import { connection } from 'next/server';
 import { Suspense } from 'react';
+import { PageLoading } from '@/components/factory/page-loading';
 
 import { refreshReposAction } from '@/app/actions/factory';
 import { AppShell } from '@/components/factory/app-shell';
@@ -17,7 +18,7 @@ import { requireSession } from '@/lib/session';
 
 export default function HomePage() {
   return (
-    <Suspense fallback={<p className="p-6 text-sm text-muted-foreground">Loading factory…</p>}>
+    <Suspense fallback={<PageLoading label="Loading factory…" />}>
       <Dashboard />
     </Suspense>
   );

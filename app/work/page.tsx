@@ -1,5 +1,6 @@
 import { connection } from 'next/server';
 import { Suspense } from 'react';
+import { PageLoading } from '@/components/factory/page-loading';
 import { AppShell } from '@/components/factory/app-shell';
 import { AutomationPanel } from '@/components/factory/automation-panel';
 import { DecisionSummary } from '@/components/factory/decision-summary';
@@ -11,7 +12,7 @@ import { workBoardCards } from '@/lib/work-board-query';
 import { requireSession } from '@/lib/session';
 
 export const metadata = { title: 'Work' };
-export default function WorkPage() { return <Suspense fallback={<p className="p-6">Loading work board…</p>}><Work /></Suspense>; }
+export default function WorkPage() { return <Suspense fallback={<PageLoading label="Loading work board…" />}><Work /></Suspense>; }
 async function Work() {
   await connection();
   const session = await requireSession();

@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { PageLoading } from "@/components/factory/page-loading";
 
 import { AppShell } from "@/components/factory/app-shell";
 import {
@@ -22,7 +23,7 @@ export default function ProjectPage({
   return (
     <Suspense
       fallback={
-        <p className="p-6 text-sm text-muted-foreground">Loading board…</p>
+        <PageLoading label="Loading board…" />
       }
     >
       <ProjectBoard params={params} />

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
+import { PageLoading } from '@/components/factory/page-loading';
 import { connection } from 'next/server';
 import { notFound } from 'next/navigation';
 import { AppShell } from '@/components/factory/app-shell';
@@ -15,7 +16,7 @@ import { formatSydneyDateTime } from '@/lib/datetime';
 
 export const metadata = { title: 'Codex run output' };
 export default function RunPage({ params }: { params: Promise<{ id: string }> }) {
-  return <Suspense fallback={<p className="p-6">Loading run output…</p>}><Run params={params} /></Suspense>;
+  return <Suspense fallback={<PageLoading label="Loading run output…" />}><Run params={params} /></Suspense>;
 }
 async function Run({ params }: { params: Promise<{ id: string }> }) {
   await connection();

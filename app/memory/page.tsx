@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
 import { Suspense, type ReactNode } from 'react';
+import { PageLoading } from '@/components/factory/page-loading';
 
 import { memorySettingsAction } from '@/app/actions/memory';
 import { AppShell } from '@/components/factory/app-shell';
@@ -27,7 +28,7 @@ const summary = 'cursor-pointer select-none font-medium marker:text-muted-foregr
 
 export default function MemoryPage({ searchParams }: { searchParams: Promise<Search> }) {
   return (
-    <Suspense fallback={<p className="p-6 text-sm text-muted-foreground">Loading memory…</p>}>
+    <Suspense fallback={<PageLoading label="Loading memory…" />}>
       <MemoryView searchParams={searchParams} />
     </Suspense>
   );

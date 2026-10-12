@@ -17,8 +17,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # Each job gets its own container and unprivileged Codex or Claude Code process.
+# pnpm lets agents update pnpm lockfiles; it switches to a repo's packageManager pin itself.
 ENV DISABLE_AUTOUPDATER=1
-RUN npm install -g @openai/codex@0.154.0 @anthropic-ai/claude-code@2.1.284 \
+RUN npm install -g @openai/codex@0.154.0 @anthropic-ai/claude-code@2.1.284 pnpm@10.11.0 \
   && useradd --uid 10001 --create-home --shell /bin/bash factory \
   && mkdir -p /workspace \
   && chmod 1777 /workspace

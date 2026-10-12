@@ -7,6 +7,7 @@ import { getGithubApp, listInstallationRepos, listRepoIssues } from "@/lib/githu
 import { setGithubIssueReady, setGithubIssueRisk } from "@/lib/github-completion";
 import { workMove } from "@/lib/board-moves";
 import { workBoardCards } from "@/lib/work-board-query";
+import { workLane, type WorkCard } from "@/lib/work-board";
 import {
   assignTicket,
   createAgent,
@@ -132,28 +133,52 @@ export async function moveTicketAction(ticketId: string, stage: string) {
   }
 }
 
+async function applyWorkMove(card: WorkCard, lane: string) {
+  const move = workMove(card, lane);
+  if ('error' in move) throw new Error(move.error);
+  // moveTicket refuses while a run is active, so this goes before any GitHub change.
+  if (move.requeue) await setTicketStage(card.id, 'intake', true);
+  if (move.ready !== undefined) {
+    const context = await getTicketWithContext(card.id);
+    if (!context?.installation) throw new Error('Ticket or GitHub installation is unavailable.');
+    const [owner, repo] = context.project.repoFullName.split('/');
+    const client = await getGithubApp().getInstallationOctokit(context.installation.installationId);
+    await setTicketLabels(card.id, await setGithubIssueReady(client, owner, repo, context.ticket.githubIssueNumber, move.ready));
+  }
+}
+
 /** A Work board drop. The lane is re-derived here, so the client's view never decides the move. */
 export async function moveWorkCardAction(ticketId: string, lane: string) {
   await requireSession();
   try {
     const card = (await workBoardCards()).find((item) => item.id === ticketId);
     if (!card) throw new Error('This task is no longer on the Work board.');
-    const move = workMove(card, lane);
-    if ('error' in move) throw new Error(move.error);
-    // moveTicket refuses while a run is active, so this goes before any GitHub change.
-    if (move.requeue) await setTicketStage(ticketId, 'intake', true);
-    if (move.ready !== undefined) {
-      const context = await getTicketWithContext(ticketId);
-      if (!context?.installation) throw new Error('Ticket or GitHub installation is unavailable.');
-      const [owner, repo] = context.project.repoFullName.split('/');
-      const client = await getGithubApp().getInstallationOctokit(context.installation.installationId);
-      await setTicketLabels(ticketId, await setGithubIssueReady(client, owner, repo, context.ticket.githubIssueNumber, move.ready));
-    }
+    await applyWorkMove(card, lane);
     return { ok: true };
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not move this task.' };
   } finally {
     // A requeue can succeed before the label change fails; show whatever was saved.
+    revalidatePath('/', 'layout');
+  }
+}
+
+/** Retry all on Needs attention: queues each listed task that is still failed there, like its own Retry button. */
+export async function retryAttentionAction(ticketIds: string[]) {
+  await requireSession();
+  const ids = new Set(z.array(z.string()).max(500).parse(ticketIds));
+  try {
+    const cards = (await workBoardCards()).filter((card) => ids.has(card.id) && workLane(card) === 'attention' && !('error' in workMove(card, 'queued')));
+    let failed = 0;
+    // One at a time, so a GitHub error on one task never leaves the others half moved.
+    for (const card of cards) {
+      try { await applyWorkMove(card, 'queued'); } catch { failed++; }
+    }
+    if (failed) return { retried: cards.length - failed, error: `${failed} of ${cards.length} tasks could not be retried. Try again.` };
+    return { retried: cards.length };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not retry these tasks.' };
+  } finally {
     revalidatePath('/', 'layout');
   }
 }

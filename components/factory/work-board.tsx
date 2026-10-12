@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { startTransition, useEffect, useOptimistic, useRef, useState } from 'react';
 import { GitPullRequest, RotateCcw, Square } from 'lucide-react';
-import { cancelRunAction, moveWorkCardAction } from '@/app/actions/factory';
+import { cancelRunAction, moveWorkCardAction, retryAttentionAction } from '@/app/actions/factory';
 import { useRouter } from 'next/navigation';
 import { ciLabel, deliveryState, executionState, riskLabel, WORK_LANES, workLane, workReason, type WorkCard } from '@/lib/work-board';
 import { movedCard, workDragBlocked, workMove } from '@/lib/board-moves';
@@ -28,6 +28,9 @@ const executionIcon: Record<string, { kind: StatusKind; progress?: number; color
 const chip = 'inline-flex h-5 max-w-full min-w-0 items-center gap-1 rounded border border-border bg-card px-1.5 text-[11px] leading-none text-muted-foreground';
 const action = 'inline-flex h-6 items-center gap-1 rounded border border-border px-1.5 text-[11px] font-medium transition-colors duration-150 ease-out hover:bg-muted disabled:opacity-50';
 const isReady = (label: string) => label.toLowerCase() === LABELS.ready;
+// Busy and error key for the Needs attention column's own actions.
+const ATTENTION = 'lane:attention';
+const retryable = (card: WorkCard) => !('error' in workMove(card, 'queued'));
 
 export function WorkBoard({ cards, refreshedAt }: { cards: WorkCard[]; refreshedAt: string }) {
   const router = useRouter();
@@ -53,6 +56,17 @@ export function WorkBoard({ cards, refreshedAt }: { cards: WorkCard[]; refreshed
       if (result.error) setError({ card: cardId, message: result.error });
     } catch { setError({ card: cardId, message: failure }); }
     finally { setBusy((ids) => { const next = new Set(ids); next.delete(cardId); return next; }); }
+  }
+  async function retryAll(cards: WorkCard[]) {
+    if (!confirm(`Retry ${cards.length} failed ${cards.length === 1 ? 'task' : 'tasks'}? Each clears its previous attempt and is queued with ${LABELS.ready}.`)) return;
+    setError(null);
+    const ids = cards.map((card) => card.id);
+    setBusy((current) => new Set([...current, ATTENTION, ...ids]));
+    try {
+      const result = await retryAttentionAction(ids);
+      if (result.error) setError({ card: ATTENTION, message: result.error });
+    } catch { setError({ card: ATTENTION, message: 'Could not retry these tasks. Try again.' }); }
+    finally { setBusy((current) => new Set([...current].filter((id) => id !== ATTENTION && !ids.includes(id)))); }
   }
   function move(id: string, lane: string) {
     setError(null);
@@ -106,12 +120,18 @@ export function WorkBoard({ cards, refreshedAt }: { cards: WorkCard[]; refreshed
         {WORK_LANES.map(([id, label]) => {
           const items = visible.filter((card) => workLane(card) === id);
           const icon = laneIcon[id];
+          const retries = id === 'attention' ? items.filter(retryable) : [];
           return <BoardColumn key={id} id={id} aria-label={`${label} tickets`}
             className={cn('flex w-72 max-w-full shrink-0 flex-col rounded-lg p-1.5', id === 'attention' && items.length ? 'bg-status-attention/5' : 'bg-muted/50')}>
             <h2 className="flex items-center gap-2 px-1.5 pb-2 pt-1 text-[13px] font-medium">
               <StatusIcon kind={icon.kind} progress={icon.progress} className={icon.color} />{label}
               <span className="font-normal tabular-nums text-muted-foreground">{items.length}</span>
+              {retries.length > 0 && <button type="button" disabled={busy.has(ATTENTION)} className={cn(action, 'ml-auto font-normal')}
+                title="Retries every failed task matching the current filters, the same as pressing Retry on each."
+                onClick={() => retryAll(retries)}>
+                <RotateCcw className="size-3" aria-hidden />{busy.has(ATTENTION) ? 'Retrying…' : 'Retry all'}</button>}
             </h2>
+            {id === 'attention' && error?.card === ATTENTION && <p role="alert" className="px-1.5 pb-2 text-xs text-status-attention">{error.message}</p>}
             <div className="flex flex-col gap-1.5">{items.slice(0, 50).map((card) => {
               const execution = executionState(card);
               const exec = executionIcon[execution.id] ?? laneIcon.intake;
@@ -160,7 +180,7 @@ export function WorkBoard({ cards, refreshedAt }: { cards: WorkCard[]; refreshed
                       aria-label="Stop execution and keep changes" title="Stops this run and keeps the branch and pull request. The task returns to Needs preparation."
                       onClick={() => act(card.id, () => cancelRunAction(card.runId!), 'Could not stop this run. Try again.')}>
                       <Square className="size-3" aria-hidden />{busy.has(card.id) ? 'Stopping…' : 'Stop'}</button>}
-                    {(id === 'attention' || card.runStatus === 'cancelled') && !('error' in workMove(card, 'queued')) && <button type="button" disabled={busy.has(card.id)} className={cn(action, 'ml-auto')}
+                    {(id === 'attention' || card.runStatus === 'cancelled') && retryable(card) && <button type="button" disabled={busy.has(card.id)} className={cn(action, 'ml-auto')}
                       title={`Clears the previous attempt and queues it with ${LABELS.ready}, the same as dragging it to Queued.`}
                       onClick={() => act(card.id, () => moveWorkCardAction(card.id, 'queued'), 'Could not retry this task. Try again.')}>
                       <RotateCcw className="size-3" aria-hidden />{busy.has(card.id) ? 'Retrying…' : 'Retry'}</button>}

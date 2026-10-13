@@ -63,7 +63,6 @@ const badgeTone = {
   running: 'border-status-running/40 text-status-running',
   review: 'border-status-review/40 text-status-review',
   attention: 'border-status-attention/40 text-status-attention',
-  done: 'border-status-done/40 text-status-done',
 };
 
 const planIcon: Record<PlanStep['status'], { kind: StatusKind; progress?: number; color: string; label: string }> = {

@@ -2,11 +2,12 @@
 import { visibleActivities, type SessionState } from '@/lib/run-session';
 import type { PublicActivity, RunSession } from '@/lib/run-activities';
 
-export const SESSION_BADGES: Record<SessionState, { label: string; tone: 'muted' | 'running' | 'attention' | 'done' | 'review' }> = {
+export const SESSION_BADGES: Record<SessionState, { label: string; tone: 'muted' | 'running' | 'attention' | 'review' }> = {
   pending: { label: 'Starting', tone: 'muted' },
   active: { label: 'Working', tone: 'running' },
   awaitingInput: { label: 'Needs input', tone: 'review' },
-  complete: { label: 'Done', tone: 'done' },
+  // Grey: a finished session is not a verified success. Green is for integrated work.
+  complete: { label: 'Done', tone: 'muted' },
   error: { label: 'Error', tone: 'attention' },
   stale: { label: 'No activity', tone: 'muted' },
   stopped: { label: 'Stopped', tone: 'muted' },

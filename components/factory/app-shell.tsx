@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { Suspense, type ReactNode } from "react";
 
 import { SignOutButton } from "@/components/studio/sign-out-button";
@@ -48,6 +49,8 @@ export function AppHeader() {
 }
 
 async function UserEmail() {
+  // Auth setup uses Math.random(), so it must run at request time like each page's session read.
+  await connection();
   const session = await requireSession();
   return (
     <span className="hidden min-w-0 wrap-anywhere text-sm text-muted-foreground sm:inline">

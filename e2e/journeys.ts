@@ -71,6 +71,8 @@ export async function runPortableJourneys(page: Page, email: string) {
   await expect(
     page.getByRole("checkbox", { name: "Allow team members to assign work" }),
   ).not.toBeChecked();
+  // Workers AI is the default provider; the Codex login form appears once Codex is chosen.
+  await page.getByRole("radio", { name: "Codex", exact: true }).check();
   await page
     .getByText("Already signed in to Codex on another machine?")
     .click();

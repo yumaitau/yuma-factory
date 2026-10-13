@@ -56,10 +56,21 @@ test('running agents share memory and an epic thread over their scoped live chan
     const tools = (await (await rpc('tools/list')).json()).result.tools.map((tool: { name: string }) => tool.name);
     expect(tools).toEqual(['factory_memory_search', 'factory_memory_propose', 'factory_thread_read', 'factory_thread_post', 'factory_team_status']);
 
-    expect((await call('factory_memory_propose', { kind: 'gotcha', content: `Checkout totals are cached in KV per cart ${suffix}.` })).result?.structuredContent.ok).toBe(true);
-    const found = await call('factory_memory_search', { query: 'checkout totals cart cache' });
-    expect(JSON.stringify(found.result?.structuredContent)).toContain(suffix);
-    expect(db.prepare('SELECT status, weight, source FROM memories WHERE project_id = ?').get(proj)).toEqual({ status: 'active', weight: 20, source: 'agent' });
+    // By default a proposal waits for review, so siblings searching the channel do not get it.
+    const proposed = `Checkout totals are cached in KV per cart ${suffix}.`;
+    expect((await call('factory_memory_propose', { kind: 'gotcha', content: proposed })).result?.structuredContent.ok).toBe(true);
+    const unreviewed = await call('factory_memory_search', { query: 'checkout totals cart cache' });
+    expect(JSON.stringify(unreviewed.result?.structuredContent)).not.toContain(suffix);
+    expect(db.prepare('SELECT status, weight, source FROM memories WHERE content = ?').get(proposed)).toEqual({ status: 'suggested', weight: 20, source: 'agent' });
+
+    // A project that opts in shares new learnings at once.
+    db.prepare('UPDATE projects SET activate_learnings = 1 WHERE id = ?').run(proj);
+    const shared = `Checkout tax is rounded per line item before totals ${suffix}.`;
+    expect((await call('factory_memory_propose', { kind: 'gotcha', content: shared })).result?.structuredContent.ok).toBe(true);
+    const found = JSON.stringify((await call('factory_memory_search', { query: 'checkout tax rounded line totals' })).result?.structuredContent);
+    expect(found).toContain(shared);
+    expect(found).not.toContain(proposed);
+    expect(db.prepare('SELECT status, weight, source FROM memories WHERE content = ?').get(shared)).toEqual({ status: 'active', weight: 20, source: 'agent' });
 
     expect((await call('factory_thread_post', { body: 'API contract: POST /checkout returns { orderId }.' })).result?.structuredContent.ok).toBe(true);
     const thread = await call('factory_thread_read');

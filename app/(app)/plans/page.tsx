@@ -25,7 +25,7 @@ export default function PlansPage() {
 
 async function Plans() {
   await connection();
-  const session = await requireSession();
+  await requireSession();
   const db = await getDb();
   const plans = await listPlans(db);
   // One thread per epic, shown on its latest plan.
@@ -33,7 +33,7 @@ async function Plans() {
   const threads = new Map(await Promise.all(latest.map(async (plan) => [plan.epic.id, await threadMessages(db, plan.epic.id, 30)] as const)));
 
   return (
-    <AppShell email={session.user.email}>
+    <AppShell>
       <div className="mb-6">
         <h1 className="text-2xl font-semibold">Plans</h1>
         <p className="text-sm text-muted-foreground">

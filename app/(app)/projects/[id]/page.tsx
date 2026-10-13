@@ -33,7 +33,7 @@ export default function ProjectPage({
 
 async function ProjectBoard({ params }: { params: Promise<{ id: string }> }) {
   await connection();
-  const session = await requireSession();
+  await requireSession();
   const { id } = await params;
 
   const project = await getProject(id);
@@ -55,7 +55,7 @@ async function ProjectBoard({ params }: { params: Promise<{ id: string }> }) {
   }));
 
   return (
-    <AppShell email={session.user.email} wide>
+    <AppShell wide>
       <div className="mb-6 wrap-anywhere">
         <h1 className="text-2xl font-semibold">{project.repoFullName}</h1>
         <p className="text-sm text-muted-foreground">

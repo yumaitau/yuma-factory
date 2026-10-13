@@ -36,7 +36,7 @@ export default function MemoryPage({ searchParams }: { searchParams: Promise<Sea
 
 async function MemoryView({ searchParams }: { searchParams: Promise<Search> }) {
   await connection();
-  const session = await requireSession();
+  await requireSession();
   const search = await searchParams;
   const db = await getDb();
   const projects = await listProjects();
@@ -94,7 +94,7 @@ async function MemoryView({ searchParams }: { searchParams: Promise<Search> }) {
           empty: 'Nothing archived. Agent learnings that keep failing runs are archived here automatically.' }];
 
   return (
-    <AppShell email={session.user.email}>
+    <AppShell>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 max-w-2xl">
           <h1 className="text-2xl font-semibold">Memory</h1>

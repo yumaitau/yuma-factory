@@ -1,16 +1,18 @@
 import 'server-only';
 
 import { headers } from 'next/headers';
+import { cache } from 'react';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
 
-export async function getSession() {
+// cache() dedupes the lookup within one request: the layout header and the page both need the session.
+export const getSession = cache(async () => {
   // Read request headers first: awaiting auth setup first lets a build prerender finish, then headers() rejects.
   const requestHeaders = await headers();
   const auth = await getAuth();
   return auth.api.getSession({ headers: requestHeaders });
-}
+});
 
 /**
  * Returns the session, or null if the user isn't signed in OR auth can't be

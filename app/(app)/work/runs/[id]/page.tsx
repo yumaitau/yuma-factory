@@ -29,7 +29,7 @@ async function Run({ params }: { params: Promise<{ id: string }> }) {
   const [context, runSession] = await Promise.all([getTicketWithContext(run.ticketId), getRunSession(db, id)]);
   if (!context || !runSession) notFound();
   const { agents, people } = await sessionPeople(db, [runSession]);
-  return <AppShell email={session.user.email}>
+  return <AppShell>
     <Link className="text-sm underline" href="/work">Back to work board</Link>
     <div className="my-6"><p className="break-all text-sm text-muted-foreground">{context.project.repoFullName} #{context.ticket.githubIssueNumber}</p>
       <h1 className="mt-2 wrap-anywhere text-2xl font-semibold">{context.ticket.title}</h1>

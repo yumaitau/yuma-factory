@@ -35,7 +35,7 @@ async function Dashboard() {
   ]);
 
   return (
-    <AppShell email={session.user.email}>
+    <AppShell>
       <div className="mb-6 flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Projects</h1>

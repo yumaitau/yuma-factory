@@ -18,7 +18,7 @@ async function Pool() {
   const session = await requireSession();
   const entries = await visibleAccounts(session.user.id);
   return (
-    <AppShell email={session.user.email}>
+    <AppShell>
       <div className="mb-6">
         <h1 className="text-2xl font-semibold">Subscriptions</h1>
         <p className="mt-1 text-sm text-muted-foreground">

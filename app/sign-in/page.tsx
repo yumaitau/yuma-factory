@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { PageLoading } from "@/components/factory/page-loading";
+import { FullPageLoading } from "@/components/factory/page-loading";
 
 import { Card } from "@/components/ui/card";
 import { Logo } from "@/components/studio/logo";
@@ -16,7 +16,7 @@ export default function SignInPage() {
   return (
     <Suspense
       fallback={
-        <PageLoading label="Loading sign-in…" />
+        <FullPageLoading label="Loading sign-in…" />
       }
     >
       <SignInContent />

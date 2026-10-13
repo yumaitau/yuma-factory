@@ -17,7 +17,7 @@ async function Work() {
   await connection();
   const session = await requireSession();
   const [status, cards, completed] = await Promise.all([automationStatus(), workBoardCards(), recentlyCompletedWork()]);
-  return <AppShell email={session.user.email} wide>
+  return <AppShell wide>
     <div className="mb-6"><h1 className="text-2xl font-semibold">Work</h1>
       <p className="mt-1 text-sm text-muted-foreground">Needs attention, work in progress, and items ready for review. A finished run, a merged pull request, and a release stay separate.</p></div>
     <DecisionSummary cards={cards} />

@@ -1,25 +1,70 @@
 @import "tailwindcss";
 
+/*
+ * Dark applies when the person chose Dark (data-theme="dark" on <html>), or chose nothing
+ * (System) and the operating system prefers dark. The inline script in app/layout.tsx sets
+ * data-theme from localStorage before the first paint.
+ */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+}
+
+/*
+ * Every text token meets WCAG 2.2 AA (4.5:1) on background, card and muted in both themes.
+ * tests/theme-contrast.test.ts checks this; change a value there first.
+ */
 :root {
+  color-scheme: light;
   --background: #faf5ee;
   --foreground: #1c1917;
   --card: #ffffff;
-  --primary: #d74c2f;
+  /* Brand orange for primary actions. Not a state colour. */
+  --primary: #bd4029;
   --primary-foreground: #fff8f5;
   --muted: #f5f0e9;
-  --muted-foreground: #78716c;
+  --muted-foreground: #6e675f;
   --border: #e7e0d8;
-  --ring: #d74c2f;
-  --accent: #d74c2f;
-  --accent-dark: #b83d25;
+  --ring: #bd4029;
+  --accent: #bd4029;
+  --accent-dark: #a1351f;
   --accent-light: #fde8e4;
   --surface-alt: #f5f0e9;
-  /* Board status colours: warm enough for the palette, distinct enough to scan. */
-  --status-attention: #b42318;
-  --status-running: #c98a12;
-  --status-waiting: #a8875a;
-  --status-review: #2d7a8c;
-  --status-done: #3d8a5a;
+  /* Board states. Red failed, blue running, amber waiting, teal ready for review, green only once verified. */
+  --status-attention: #a8123a;
+  --status-running: #1f5fbf;
+  --status-waiting: #8a5a00;
+  --status-review: #276e7e;
+  --status-done: #2a7046;
+
+  @variant dark {
+    color-scheme: dark;
+    --background: #171412;
+    --foreground: #f3ede6;
+    --card: #24201c;
+    --primary: #ef6a4a;
+    --primary-foreground: #1c0f0b;
+    --muted: #29241f;
+    --muted-foreground: #a8a097;
+    --border: #3a332d;
+    --ring: #ef6a4a;
+    --accent: #ef6a4a;
+    /* Primary hover. Lighter than primary on a dark page. */
+    --accent-dark: #f5876b;
+    --accent-light: #3b1f17;
+    --surface-alt: #29241f;
+    --status-attention: #ff7a93;
+    --status-running: #6aa5f8;
+    --status-waiting: #e0a93a;
+    --status-review: #4fb8c8;
+    --status-done: #5cc184;
+  }
 }
 
 @theme inline {
@@ -53,3 +98,8 @@ h1, h2, h3 { font-family: var(--font-heading); letter-spacing: -0.02em; }
 /* Issue panel entrance. */
 @keyframes sheet-in { from { transform: translateX(24px); opacity: 0; } }
 @keyframes fade-in { from { opacity: 0; } }
+
+/* Animations are already motion-safe; this removes the remaining hover and expand transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { transition-duration: 0s !important; }
+}

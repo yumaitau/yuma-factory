@@ -34,7 +34,7 @@ export function SignInForm() {
 
   return (
     <div className="space-y-4">
-      {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
+      {error ? <p role="alert" className="text-sm text-status-attention">{error}</p> : null}
       <Button className="w-full" disabled={pending} onClick={signInWithGoogle} type="button">
         {pending ? 'Redirecting…' : 'Sign in with Google Workspace'}
       </Button>

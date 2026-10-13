@@ -59,7 +59,7 @@ async function Plans() {
                   <span className="text-xs text-muted-foreground">{formatSydneyDateTime(plan.createdAt)}</span>
                 </div>
                 <p className="mb-3 whitespace-pre-wrap text-sm">{plan.summary}</p>
-                {plan.error ? <p className="mb-3 text-sm text-red-600">{plan.error}</p> : null}
+                {plan.error ? <p className="mb-3 text-sm text-status-attention">{plan.error}</p> : null}
                 <ol className="mb-3 flex list-decimal flex-col gap-1 pl-5 text-sm">
                   {plan.tasks.map((task) => {
                     const subtask = plan.subtasks.find((item) => item.planTask === planTaskId(plan.id, task.key));
@@ -83,7 +83,7 @@ async function Plans() {
                   })}
                 </ol>
                 {conflicts.length ? (
-                  <p className="mb-3 text-sm text-amber-700">
+                  <p className="mb-3 text-sm text-status-waiting">
                     Parallel tasks touch the same files: {conflicts.map((item) => `${item.a} and ${item.b} (${item.files.join(', ')})`).join('; ')}.
                     Expect merge conflicts; reject and re-plan if they matter.
                   </p>

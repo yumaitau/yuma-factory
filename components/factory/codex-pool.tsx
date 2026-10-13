@@ -213,7 +213,7 @@ export function CodexPool({
           </p>
         )}
         {error && (
-          <p role="alert" className="mt-3 text-sm text-red-700">
+          <p role="alert" className="mt-3 text-sm text-status-attention">
             {error}
           </p>
         )}
@@ -285,7 +285,7 @@ export function CodexPool({
                 </p>
               )}
               {entry.error && (
-                <p className="mt-3 text-sm text-red-700">{entry.error}</p>
+                <p className="mt-3 text-sm text-status-attention">{entry.error}</p>
               )}
               <p className="mt-3 text-xs">
                 {!entry.enabled ? "Excluded from new work. Credentials stay connected." : entry.shared

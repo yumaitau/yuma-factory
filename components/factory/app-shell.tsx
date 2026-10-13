@@ -2,6 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense, type ReactNode } from "react";
 
+import { ThemeToggle } from "@/components/factory/theme-toggle";
 import { SignOutButton } from "@/components/studio/sign-out-button";
 import { Logo } from "@/components/studio/logo";
 import { APP_NAME } from "@/lib/brand";
@@ -41,6 +42,7 @@ export function AppHeader() {
           <Suspense fallback={null}>
             <UserEmail />
           </Suspense>
+          <ThemeToggle />
           <SignOutButton />
         </div>
       </div>

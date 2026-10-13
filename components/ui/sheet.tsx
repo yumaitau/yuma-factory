@@ -14,7 +14,7 @@ export const SheetDescription = SheetPrimitive.Description;
 export function SheetContent({ className, children, ...props }: React.ComponentProps<typeof SheetPrimitive.Content>) {
   return (
     <SheetPrimitive.Portal>
-      <SheetPrimitive.Overlay className="fixed inset-0 z-40 bg-foreground/10 motion-safe:data-[state=open]:animate-[fade-in_150ms_ease-out]" />
+      <SheetPrimitive.Overlay className="fixed inset-0 z-40 bg-foreground/10 dark:bg-black/50 motion-safe:data-[state=open]:animate-[fade-in_150ms_ease-out]" />
       <SheetPrimitive.Content
         className={cn(
           'fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-[600px] flex-col border-l border-border bg-background shadow-xl outline-none motion-safe:data-[state=open]:animate-[sheet-in_200ms_ease-out]',

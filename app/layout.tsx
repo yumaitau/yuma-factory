@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import "./globals.css";
 import { APP_NAME } from "@/lib/brand";
+import { themeScript } from "@/lib/theme";
 
 const sora = Sora({
   subsets: ["latin"],
@@ -28,7 +29,11 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en-AU" className={`${sora.variable} ${dmSans.variable}`}>
+    // The inline script adds data-theme before React hydrates.
+    <html lang="en-AU" className={`${sora.variable} ${dmSans.variable}`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="antialiased">{children}</body>
     </html>
   );

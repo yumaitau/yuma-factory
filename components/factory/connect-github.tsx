@@ -17,7 +17,7 @@ export function ConnectGithub({ installUrl }: { installUrl: string | null }) {
           Install GitHub App
         </a>
       ) : (
-        <p className="text-sm text-red-700">
+        <p className="text-sm text-status-attention">
           GitHub App is not configured. Set the GITHUB_APP_* secrets, then reload.
         </p>
       )}

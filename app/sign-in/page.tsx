@@ -53,7 +53,7 @@ async function SignInContent() {
         {googleConfigured ? (
           <SignInForm />
         ) : (
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="rounded-md border border-status-waiting/40 bg-status-waiting/10 p-3 text-sm text-foreground">
             Google Workspace SSO is not configured yet. Set{" "}
             <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>{" "}
             on the worker (see <code>SECRETS.md</code>), then reload.

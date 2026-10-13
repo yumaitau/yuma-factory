@@ -5,6 +5,7 @@ import { getDb } from '@/lib/db';
 import { getGithubApp } from '@/lib/github';
 import { forEachConcurrent } from '@/lib/concurrency';
 import { matchOpenPulls, uniquePullCandidates, type CompletedWork, type ReviewQueue } from '@/lib/work-review';
+import { syncHeadEvidence } from '@/lib/review-evidence-store';
 
 export async function recentlyCompletedWork(): Promise<CompletedWork[]> {
   const db = await getDb();
@@ -18,7 +19,7 @@ export async function recentlyCompletedWork(): Promise<CompletedWork[]> {
 
 export async function outstandingPullRequests(): Promise<ReviewQueue> {
   const db = await getDb();
-  const rows = await db.select({ runId: runs.id, repo: projects.repoFullName, status: runs.status,
+  const rows = await db.select({ runId: runs.id, ticketId: runs.ticketId, repo: projects.repoFullName, status: runs.status,
     pullRequestUrl: runs.pullRequestUrl, installationId: githubInstallations.installationId })
     .from(runs).innerJoin(tickets, eq(runs.ticketId, tickets.id)).innerJoin(projects, eq(tickets.projectId, projects.id))
     .innerJoin(githubInstallations, eq(projects.installationId, githubInstallations.id))
@@ -38,7 +39,13 @@ export async function outstandingPullRequests(): Promise<ReviewQueue> {
         owner, repo, state: 'open', per_page: 100, sort: 'updated', direction: 'desc',
         request: { signal: AbortSignal.timeout(15_000) },
       });
-      queue.pulls.push(...matchOpenPulls(group, pulls));
+      const matched = matchOpenPulls(group, pulls);
+      // Each row shows the checks GitHub reports for the PR's current head, and older records as stale.
+      await forEachConcurrent(matched, 4, async (pr) => {
+        if (pr.headSha && pr.ticketId) pr.evidence = await syncHeadEvidence(db, client,
+          { runId: pr.runId, ticketId: pr.ticketId, owner, repo, headSha: pr.headSha }).catch(() => null);
+      });
+      queue.pulls.push(...matched);
     } catch { queue.unavailableRepos.push(fullName); }
   });
   queue.pulls.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));

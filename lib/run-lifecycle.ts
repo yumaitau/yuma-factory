@@ -59,7 +59,7 @@ export async function claimRun(db: Db, input: {
     db.insert(runs).select(sql`select
       ${id}, ${ticketId}, ${agentId}, 'running', null, ${accountId}, ${userId},
       ${modelId}, ${mode}, '', null, null, null, null, 0, 0, ${createdAt}, null, ${createdAt},
-      ${branchName}, ${parentRunId}, null, ${attempt}, null
+      ${branchName}, ${parentRunId}, null, ${attempt}, null, null
       from ${tickets} where ${eligible}`).returning({ id: runs.id }),
     db.update(agents).set({ status: 'working', updatedAt: new Date() }).where(and(eq(agents.id, agentId), ownsRun)),
     db.update(tickets).set({ stage: 'in_progress', assignedAgentId: agentId, updatedAt: new Date() })

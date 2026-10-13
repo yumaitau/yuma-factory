@@ -1,13 +1,17 @@
+import type { EvidenceGate } from '@/lib/review-evidence';
+
 export type CompletedWork = {
   runId: string; title: string; repo: string; issueNumber: number;
   finishedAt: string; pullRequestUrl: string | null;
 };
 export type ReviewPullRequest = {
-  url: string; number: number; title: string; repo: string; runId: string;
+  url: string; number: number; title: string; repo: string; runId: string; ticketId?: string;
   draft: boolean; updatedAt: string; running: boolean;
+  // Current head commit and the checks recorded against it; stale records are kept, labelled.
+  headSha?: string | null; evidence?: EvidenceGate | null;
 };
 export type ReviewQueue = { pulls: ReviewPullRequest[]; unavailableRepos: string[]; checkedAt: string };
-export type PullCandidate = { runId: string; repo: string; pullRequestUrl: string | null; status: string };
+export type PullCandidate = { runId: string; repo: string; pullRequestUrl: string | null; status: string; ticketId?: string };
 
 /**
  * Single tolerant parser for GitHub PR URLs. Accepts a trailing slash,
@@ -35,7 +39,7 @@ export function uniquePullCandidates<T extends PullCandidate>(rows: T[]) {
 }
 
 export function matchOpenPulls(candidates: PullCandidate[], pulls: {
-  number: number; state: string; title: string; html_url: string; draft?: boolean; updated_at: string;
+  number: number; state: string; title: string; html_url: string; draft?: boolean; updated_at: string; head?: { sha: string };
 }[]): ReviewPullRequest[] {
   return pulls.filter((pr) => pr.state === 'open').flatMap((pr) => {
     // Match on repo AND number: PR numbers collide across repositories.
@@ -43,7 +47,7 @@ export function matchOpenPulls(candidates: PullCandidate[], pulls: {
       const ref = parsePullRef(row.pullRequestUrl, row.repo);
       return ref !== null && ref.number === pr.number;
     });
-    return run ? [{ url: pr.html_url, number: pr.number, title: pr.title, repo: run.repo,
-      runId: run.runId, draft: pr.draft ?? false, updatedAt: pr.updated_at, running: run.status === 'running' }] : [];
+    return run ? [{ url: pr.html_url, number: pr.number, title: pr.title, repo: run.repo, runId: run.runId, ticketId: run.ticketId,
+      draft: pr.draft ?? false, updatedAt: pr.updated_at, running: run.status === 'running', headSha: pr.head?.sha ?? null }] : [];
   });
 }

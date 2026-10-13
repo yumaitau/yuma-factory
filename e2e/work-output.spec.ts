@@ -172,7 +172,7 @@ test('completed work, open PR review and authenticated live output', async ({ pa
     await expect(page.getByText('No open Factory PRs waiting for review.')).toBeVisible();
     // The card title opens the issue panel; Watch live goes to the raw log.
     await page.getByRole('article', { name: 'fixture/work-output#1' }).getByRole('link', { name: /^(Watch live|View output)$/ }).click();
-    const output = page.getByLabel('Execution log');
+    const output = page.getByLabel('Run transcript', { exact: true });
     await expect(output).toContainText('Output event', { timeout: 20_000 });
     const first = polls;
     await expect.poll(() => polls, { timeout: 10_000 }).toBeGreaterThan(first);
@@ -190,11 +190,11 @@ test('completed work, open PR review and authenticated live output', async ({ pa
     await expect(output).toContainText('All tests passed.', { timeout: 10_000 });
     await expect(page.getByRole('status')).toHaveText('Run finished');
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(page.getByLabel('Execution log')).toBeVisible();
+    await expect(page.getByLabel('Run transcript', { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/run-output-mobile.png', fullPage: true });
     await page.goto(`/work/runs/${doneId}`);
-    await expect(page.getByLabel('Execution log')).toContainText('Completed fixture output');
+    await expect(page.getByLabel('Run transcript', { exact: true })).toContainText('Completed fixture output');
     await page.setViewportSize({ width: 1440, height: 1000 });
     reviewOpen = true;
     await page.goto('/work');

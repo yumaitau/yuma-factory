@@ -8,6 +8,8 @@ import { runLeased } from '@/lib/codex/accounts';
 import type { WorkCard } from '@/lib/work-board';
 import { sessionState, type SessionState } from '@/lib/run-session';
 import { isFollowUp } from '@/lib/run-retry';
+import { evidenceFromRow, latestRunEvidence } from '@/lib/review-evidence-store';
+import { evidenceGate } from '@/lib/review-evidence';
 
 /** One malformed labels row must not break the whole board. */
 function parseLabels(labels: string | null): string[] {
@@ -42,6 +44,7 @@ export async function workBoardCards(ticketId?: string): Promise<(WorkCard & { s
   const blocker = alias(tickets, 'blocker');
   const blocks = await db.select({ ticketId: ticketDependencies.ticketId, number: blocker.githubIssueNumber }).from(ticketDependencies)
     .innerJoin(blocker, eq(ticketDependencies.dependsOnTicketId, blocker.id)).where(eq(blocker.githubState, 'open')).all();
+  const evidence = await latestRunEvidence(db, ticketId);
   // A PR closed without merging ends that attempt; the ticket leaves the board until requeued.
   return rows.filter(({ ticket, run }) => ticketId || !(run?.pullRequestState === 'closed' && !(ticket.requeuedAt && ticket.requeuedAt > run.createdAt)))
     .map(({ ticket, repo, agent, run: latest, account, leased, activity }) => {
@@ -63,6 +66,7 @@ export async function workBoardCards(ticketId?: string): Promise<(WorkCard & { s
       blockedBy: blocks.filter((block) => block.ticketId === ticket.id).map((block) => block.number),
       sessionState: run ? sessionState(run, type ? { type, createdAt: new Date(Number(at)) } : null, now) : null,
       runAttempt: run?.attempt ?? 1, runFailureKind: run?.failureKind ?? null, runFollowUp: !!run && isFollowUp(run),
+      evidence: run?.pullRequestUrl ? evidenceGate((evidence.get(run.id) ?? []).map(evidenceFromRow), run.pullRequestHeadSha) : null,
     };
   });
 }

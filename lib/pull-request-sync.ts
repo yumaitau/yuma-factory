@@ -5,13 +5,14 @@ import { getGithubApp } from '@/lib/github';
 import { markGithubIssueDone } from '@/lib/github-completion';
 import { forEachConcurrent } from '@/lib/concurrency';
 import { parsePullRef } from '@/lib/work-review';
+import { syncHeadEvidence } from '@/lib/review-evidence-store';
 import type { Db } from '@/lib/queries';
 
 type Client = Awaited<ReturnType<ReturnType<typeof getGithubApp>['getInstallationOctokit']>>;
 
 /**
  * Track the PRs of open tickets' latest finished runs. A merged PR finishes its ticket;
- * a PR closed without merging hides the ticket from the Work board.
+ * a PR closed without merging hides the ticket from the Work board. An open PR's head checks are recorded as evidence.
  */
 export async function syncPullRequests(db: Db, clientFor: (installationId: number) => Promise<Client>, deadline: number, limit = 30) {
   const rows = await db.select({ run: runs, ticket: tickets, repo: projects.repoFullName, installationId: githubInstallations.installationId })
@@ -33,6 +34,8 @@ export async function syncPullRequests(db: Db, clientFor: (installationId: numbe
         owner, repo: name, pull_number: ref.number, request: { signal: AbortSignal.timeout(15_000) },
       });
       const state = pull.merged ? 'merged' : pull.state === 'closed' ? 'closed' : 'open';
+      if (state === 'open' && pull.head?.sha)
+        await syncHeadEvidence(db, client, { runId: run.id, ticketId: ticket.id, owner, repo: name, headSha: pull.head.sha });
       if (state === 'merged') {
         const labels = await markGithubIssueDone(client, owner, name, ticket.githubIssueNumber);
         await db.update(tickets).set({ stage: 'done', githubState: 'closed', labels: JSON.stringify(labels), updatedAt: new Date() })

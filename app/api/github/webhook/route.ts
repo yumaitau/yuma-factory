@@ -6,6 +6,7 @@ import { getEnv, githubAppCredentials } from '@/lib/env';
 import { enqueuePickup } from '@/lib/automation-queue';
 import { LABELS } from '@/lib/brand';
 import { planLinkForBody } from '@/lib/collab-store';
+import { observePullHead } from '@/lib/review-evidence-store';
 
 /**
  * GitHub App webhook receiver. Verifies the HMAC-SHA256 signature against
@@ -37,7 +38,13 @@ export async function POST(request: Request) {
       await enqueuePickup(`GitHub issue ${payload.action}`);
     }
   }
-  // Other events (installation, installation_repositories, pull_request) can be
+  if (event === 'pull_request') {
+    // A push moves the head: evidence on the previous commit becomes stale at once.
+    const payload = JSON.parse(raw) as { pull_request?: { html_url?: string; head?: { sha?: string } } };
+    const { html_url: url, head } = payload.pull_request ?? {};
+    if (typeof url === 'string' && typeof head?.sha === 'string') await observePullHead(await getDb(), url, head.sha);
+  }
+  // Other events (installation, installation_repositories) can be
   // added here later; unhandled events are acknowledged so GitHub stops retrying.
   return Response.json({ ok: true });
 }

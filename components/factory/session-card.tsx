@@ -169,7 +169,7 @@ export function SessionCard({ session, agent, authorName, expanded = true, onTog
       </span>
       <span className="text-xs tabular-nums text-muted-foreground">{formatWorkedFor(session.workedForMs)}</span>
       <span className="ml-auto flex items-center gap-3 text-xs">
-        {rawLog && <Link href={`/work/runs/${run.id}`} className="text-muted-foreground hover:text-foreground hover:underline">Raw log</Link>}
+        {rawLog && <Link href={`/work/runs/${run.id}`} className="text-muted-foreground hover:text-foreground hover:underline" title="The agent's own account of the run. It is not review evidence.">Transcript</Link>}
         {pr && PrIcon && <a href={run.pullRequestUrl!} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline">
           <PrIcon aria-hidden className={cn('size-3', prColor(pr))} />PR {pr}</a>}
         {onStop && running && <button type="button" disabled={stopping} onClick={stop}
@@ -197,7 +197,7 @@ export function SessionCard({ session, agent, authorName, expanded = true, onTog
         return <Activity key={activity.seq} activity={activity} live={running} authorName={authorName} />;
       })}
       {!activities.length && <p className="text-[13px] text-muted-foreground">
-        {state === 'pending' ? 'Waiting for the agent’s first step…' : 'No session activity was recorded for this run. Check the raw log.'}
+        {state === 'pending' ? 'Waiting for the agent’s first step…' : 'No session activity was recorded for this run. Check the transcript.'}
       </p>}
     </div>}
   </section>;

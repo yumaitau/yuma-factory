@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { deliveryState, executionState, workLane, workReason, type WorkCard } from '../lib/work-board';
+import { evidenceGate } from '../lib/review-evidence';
 const card: WorkCard = { id: 'ticket', title: 'Fix', number: 1, repo: 'org/repo', projectId: 'project', htmlUrl: 'https://github.com/org/repo/issues/1',
   stage: 'intake', githubState: 'open', labels: ['factory:ready'], assignedAgentId: null, agentName: null, automationSlot: null,
   runStatus: null, runId: null, startedAt: null, finishedAt: null, pullRequestUrl: null };
@@ -48,7 +49,10 @@ test('plan proposals and blocked subtasks explain what they wait for', () => {
 });
 
 test('execution and delivery stay separate when a run finishes or an issue closes', () => {
-  const reviewed = { ...card, runStatus: 'succeeded', runId: 'run', stage: 'review', pullRequestUrl: 'https://github.com/org/repo/pull/2' };
+  const sha = 'c'.repeat(40);
+  const evidence = evidenceGate([{ kind: 'check', name: 'test', sourceSha: sha, environment: null, startedAt: null, finishedAt: null, result: 'passed', url: null, logKey: null }], sha);
+  const reviewed = { ...card, runStatus: 'succeeded', runId: 'run', stage: 'review', pullRequestUrl: 'https://github.com/org/repo/pull/2', evidence };
+  assert.equal(workLane(reviewed), 'review');
   assert.equal(executionState(reviewed).id, 'completed');
   assert.equal(deliveryState(reviewed).id, 'in_review');
   assert.match(workReason(reviewed), /Merging and deploying are separate/);

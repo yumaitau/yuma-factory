@@ -103,25 +103,17 @@ export function isLowRisk(labels, prefix) {
 }
 
 /**
- * SHA-pinned merge commit for a confirmed-green PR, so every PR commit lands on the
- * base branch unchanged. Never squashes or rebases: a repository that disallows merge
- * commits leaves the PR for a human. Already merged is success.
- * Branch-protection / review blocks return "blocked" so the ticket can still close.
+ * Low-risk policy: ask Factory to merge the CI-confirmed SHA. Factory serialises it with people's merges,
+ * records it as its own merge of that SHA, and refuses (409) when the head moved. Without the bridge's
+ * merge channel nothing merges: the PR is left for review rather than merged unrecorded.
  */
-export async function mergeGreenPullRequest({ github, pullNumber, sha }) {
-  const pr = await github(`/pulls/${pullNumber}`);
-  if (pr.merged) return { result: "already-merged", sha: pr.merge_commit_sha || null };
-  if (pr.state !== "open") throw new Error("Pull request closed before merge. Ticket left open.");
-  if (!pr.head?.sha || pr.head.sha !== sha) throw new Error("PR head changed before merge. Ticket left open.");
-  try {
-    const result = await github(`/pulls/${pullNumber}/merge`, "PUT", { sha, merge_method: "merge" });
-    return result.merged ? { result: "merge", sha: result.sha || null } : { result: "blocked", sha: null };
-  } catch (error) {
-    if (error.status === 409) throw new Error("PR head changed before merge. Ticket left open.");
-    // 405 includes "merge commits not allowed": leave the PR for review rather than squash.
-    if (error.status === 405 || error.status === 422) return { result: "blocked", sha: null };
-    throw error;
-  }
+export async function requestFactoryMerge({ post, pullRequestUrl, sha }) {
+  if (!post) return { result: "blocked", sha: null };
+  const { status, data } = await post({ pullRequestUrl, sha });
+  if (status === 409) throw new Error(data?.error ?? "PR head changed before merge. Ticket left open.");
+  if (status < 200 || status >= 300) throw new Error(data?.error ?? `Factory merge failed (${status}). Ticket left open.`);
+  if (!["merge", "already-merged", "blocked"].includes(data?.result)) throw new Error("Invalid merge response. Ticket left open.");
+  return { result: data.result, sha: typeof data.sha === "string" ? data.sha : null };
 }
 
 export const NO_PR_CI_MS = 30 * 60_000;

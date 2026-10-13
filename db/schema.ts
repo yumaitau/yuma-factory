@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
@@ -137,6 +138,8 @@ export const projects = sqliteTable(
     activateLearnings: integer("activate_learnings", { mode: "boolean" }).notNull().default(false),
     // Planner breakdowns create subtasks without waiting for approval.
     autoApprovePlans: integer("auto_approve_plans", { mode: "boolean" }).notNull().default(false),
+    // Where a merged change is deployed from. Null hides the Deploy control; Factory builds no pipelines.
+    deploymentTarget: text("deployment_target"),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },
@@ -322,6 +325,57 @@ export const runEvidence = sqliteTable(
   (table) => [
     uniqueIndex("run_evidence_uidx").on(table.runId, table.sourceSha, table.kind, table.name),
     index("run_evidence_ticket_idx").on(table.ticketId),
+  ],
+);
+
+/**
+ * A person's acceptance of one pull request head. Accepting never merges. A new head supersedes it;
+ * superseded rows stay as history. At most one active acceptance per pull request.
+ */
+export const reviewAcceptances = sqliteTable(
+  "review_acceptances",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    ticketId: text("ticket_id").notNull().references(() => tickets.id, { onDelete: "cascade" }),
+    pullRequestUrl: text("pull_request_url").notNull(),
+    headSha: text("head_sha").notNull(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("active"), // active|superseded
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    supersededAt: integer("superseded_at", { mode: "timestamp" }),
+  },
+  (table) => [
+    uniqueIndex("review_acceptances_active_uidx").on(table.pullRequestUrl).where(sql`status = 'active'`),
+    index("review_acceptances_ticket_idx").on(table.ticketId, table.createdAt),
+  ],
+);
+
+/**
+ * One row per merge attempt, by a person or by Factory's low-risk policy, naming the head SHA.
+ * The partial unique index admits one pending or merged row per pull request: concurrent
+ * attempts resolve to a single GitHub merge and share its recorded result.
+ */
+export const mergeEvents = sqliteTable(
+  "merge_events",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    ticketId: text("ticket_id").notNull().references(() => tickets.id, { onDelete: "cascade" }),
+    pullRequestUrl: text("pull_request_url").notNull(),
+    headSha: text("head_sha").notNull(),
+    actor: text("actor").notNull(), // user|factory
+    userId: text("user_id"),
+    acceptanceId: text("acceptance_id"),
+    status: text("status").notNull().default("pending"), // pending|merged|already-merged|blocked|refused|failed|abandoned
+    mergeSha: text("merge_sha"),
+    message: text("message"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    finishedAt: integer("finished_at", { mode: "timestamp" }),
+  },
+  (table) => [
+    uniqueIndex("merge_events_open_uidx").on(table.pullRequestUrl).where(sql`status in ('pending', 'merged')`),
+    index("merge_events_ticket_idx").on(table.ticketId, table.createdAt),
   ],
 );
 

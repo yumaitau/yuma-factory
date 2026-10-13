@@ -188,7 +188,7 @@ async function renewGithub(env: Env, id: string, accountId: string, resume = fal
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error("GitHub credential renewal unavailable.");
-  return response.json<{ token: string; issuedAt: number; runToken?: string }>();
+  return response.json<{ token: string; issuedAt: number; runToken?: string; mergeToken?: string }>();
 }
 async function recover(env: Env, id: string, accountId: string, cancel = false) {
   const sb = sandbox(env, `run-${id}`);
@@ -229,7 +229,7 @@ async function recover(env: Env, id: string, accountId: string, cancel = false) 
       await restore(env, accountId, sb);
       await sb.mkdir("/factory", { recursive: true });
       // Credentials stay out of the durable R2 job; only the root-only request file holds them.
-      await sb.writeFile("/factory/request.json", JSON.stringify({ ...request, ...runnerSettings(env), githubToken: credential.token, runToken: credential.runToken }));
+      await sb.writeFile("/factory/request.json", JSON.stringify({ ...request, ...runnerSettings(env), githubToken: credential.token, runToken: credential.runToken, mergeToken: credential.mergeToken }));
       await sb.writeFile("/factory/github-token.json", JSON.stringify({ token: credential.token, issuedAt: credential.issuedAt }));
       await installScripts(sb);
       await sb.startProcess("node /opt/factory/bridge.mjs run", { processId: "codex-run", autoCleanup: false });

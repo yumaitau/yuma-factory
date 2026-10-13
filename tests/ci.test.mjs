@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateCI, finishCommitCI, isAccountBlockedCI, isCiConfigPath, MAX_IDLE_REPAIRS, isReviewBot, finishWithGreenCI, isLowRisk, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest, requiredChecks } from "../sandbox-runner/scripts/ci.mjs";
+import { evaluateCI, finishCommitCI, isAccountBlockedCI, isCiConfigPath, MAX_IDLE_REPAIRS, isReviewBot, finishWithGreenCI, isLowRisk, latestWorkflows, loadRequiredChecks, requestFactoryMerge, requiredChecks } from "../sandbox-runner/scripts/ci.mjs";
 
 test("CI requires reported checks and waits for pending work", () => {
   assert.equal(evaluateCI([], [], []).state, "pending");
@@ -111,46 +111,16 @@ test("policy lookup errors fail closed; only confirmed unprotected branches allo
 });
 
 
-test("low-risk merge is SHA-pinned, uses a merge commit, and treats already-merged as success", async () => {
-  const calls = [];
-  const github = async (path, method = "GET", body) => {
-    calls.push({ path, method, body });
-    if (path === "/pulls/4" && method === "GET") return { merged: false, state: "open", head: { sha: "abc" } };
-    if (method === "PUT") return { merged: true, sha: "merged" };
-    throw new Error(`unexpected ${method} ${path}`);
-  };
-  assert.deepEqual(await mergeGreenPullRequest({ github, pullNumber: 4, sha: "abc" }), { result: "merge", sha: "merged" });
-  assert.equal(calls.at(-1)?.body.merge_method, "merge");
-  assert.deepEqual(await mergeGreenPullRequest({
-    github: async (path) => path === "/pulls/4" ? { merged: true, state: "closed", head: { sha: "abc" }, merge_commit_sha: "landed" } : assert.fail("merged PRs must not PUT"),
-    pullNumber: 4, sha: "abc",
-  }), { result: "already-merged", sha: "landed" });
-});
-
-test("never squashes: disallowed merge commits and review blocks leave the PR; SHA drift throws", async () => {
-  const methods = [];
-  const noMergeCommits = async (_path, verb = "GET", body) => {
-    if (verb === "GET") return { merged: false, state: "open", head: { sha: "abc" } };
-    methods.push(body.merge_method);
-    throw Object.assign(new Error("failed"), { status: 405, apiMessage: "Merge commits are not allowed on this repository." });
-  };
-  assert.deepEqual(await mergeGreenPullRequest({ github: noMergeCommits, pullNumber: 4, sha: "abc" }), { result: "blocked", sha: null });
-  assert.deepEqual(methods, ["merge"]);
-  assert.deepEqual(await mergeGreenPullRequest({
-    github: async (_path, verb = "GET") => {
-      if (verb === "GET") return { merged: false, state: "open", head: { sha: "abc" } };
-      throw Object.assign(new Error("failed"), { status: 405, apiMessage: "Pull Request is not mergeable" });
-    },
-    pullNumber: 4, sha: "abc",
-  }), { result: "blocked", sha: null });
-  await assert.rejects(mergeGreenPullRequest({
-    github: async () => ({ merged: false, state: "open", head: { sha: "other" } }),
-    pullNumber: 4, sha: "abc",
-  }), /PR head changed/);
-  await assert.rejects(mergeGreenPullRequest({
-    github: async () => ({ merged: false, state: "open", head: {} }),
-    pullNumber: 4, sha: "abc",
-  }), /PR head changed/);
+test("low-risk merge goes through Factory; a moved head is refused and no channel merges nothing", async () => {
+  const sent = [];
+  const post = async (body) => { sent.push(body); return { status: 200, data: { result: "merge", sha: "landed" } }; };
+  assert.deepEqual(await requestFactoryMerge({ post, pullRequestUrl: "https://github.com/org/repo/pull/4", sha: "abc" }), { result: "merge", sha: "landed" });
+  assert.deepEqual(sent, [{ pullRequestUrl: "https://github.com/org/repo/pull/4", sha: "abc" }]);
+  assert.deepEqual(await requestFactoryMerge({ post: async () => ({ status: 200, data: { result: "blocked", sha: null } }), sha: "abc" }), { result: "blocked", sha: null });
+  await assert.rejects(requestFactoryMerge({ post: async () => ({ status: 409, data: { error: "PR head changed before merge. Ticket left open." } }), sha: "abc" }), /PR head changed/);
+  await assert.rejects(requestFactoryMerge({ post: async () => ({ status: 502, data: {} }), sha: "abc" }), /Factory merge failed/);
+  await assert.rejects(requestFactoryMerge({ post: async () => ({ status: 200, data: { result: "squash" } }), sha: "abc" }), /Invalid merge response/);
+  assert.deepEqual(await requestFactoryMerge({ post: null, sha: "abc" }), { result: "blocked", sha: null });
   assert.equal(isLowRisk(["severity:low"]), true);
   assert.equal(isLowRisk(["factory:risk:low", "severity:high"]), false);
   assert.equal(isLowRisk(["Risk / Low"]), true);

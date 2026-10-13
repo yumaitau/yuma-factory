@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { formatSydneyDateTime } from '@/lib/datetime';
 import type { CompletedWork, ReviewPullRequest, ReviewQueue } from '@/lib/work-review';
 import { EvidenceList } from '@/components/factory/evidence-list';
+import { issueLinkProps } from '@/components/factory/issue-panel';
 
 /** Ready for review only with passing checks on the current head; otherwise the evidence says why not. */
 function reviewStatus(pr: ReviewPullRequest) {
@@ -45,7 +46,7 @@ export function WorkReview({ completed }: { completed: CompletedWork[] }) {
         <h2 id="review-heading" className="text-lg font-semibold">PRs to review{queue ? ` (${queue.pulls.length})` : ''}</h2>
         <button className="rounded-md border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50" disabled={loading} onClick={() => setRefresh((n) => n + 1)}>{loading ? 'Checking GitHub…' : 'Refresh PRs'}</button>
       </div>
-      <p className="my-3 text-xs text-muted-foreground">Open pull requests from Factory. A pull request is ready for review only when checks passed on its current head. Reviewing one does not merge it and does not deploy it. Low-risk tickets merge automatically after green CI. Other merging stays with you.</p>
+      <p className="my-3 text-xs text-muted-foreground">Open pull requests from Factory. A pull request is ready for review only when checks passed on its current head. Accepting a review records who accepted which commit; it does not merge. Merge needs an acceptance of the current head, and does not deploy. Low-risk tickets merge automatically after green CI, recorded as Factory’s merge.</p>
       {error && <p role="alert" className="mb-3 text-sm text-primary">{error}</p>}
       {!!queue?.unavailableRepos.length && <p role="alert" className="mb-3 text-sm">GitHub status unavailable for {queue.unavailableRepos.join(', ')}. Queue may be incomplete.</p>}
       {!queue && loading && <p role="status" className="py-4 text-sm text-muted-foreground">Loading pull requests…</p>}
@@ -57,7 +58,7 @@ export function WorkReview({ completed }: { completed: CompletedWork[] }) {
           <p className="mt-1 text-xs text-muted-foreground">{reviewStatus(pr)}{pr.headSha ? <> · Head <code className="font-mono">{pr.headSha.slice(0, 7)}</code></> : null} · Updated {formatSydneyDateTime(pr.updatedAt)} · Review does not merge or deploy</p>
           {pr.evidence && <div className="mt-2"><EvidenceList gate={pr.evidence} limit={5} /></div>}
         </div>
-        <div className="flex gap-3 text-xs"><Link className="underline" href={`/work/runs/${pr.runId}`}>Transcript</Link><a className="font-medium text-primary underline" href={pr.url} target="_blank" rel="noreferrer">Review PR</a></div>
+        <div className="flex gap-3 text-xs">{pr.ticketId && !pr.running && <a className="underline" {...issueLinkProps(pr.ticketId)}>Accept or merge</a>}<Link className="underline" href={`/work/runs/${pr.runId}`}>Transcript</Link><a className="font-medium text-primary underline" href={pr.url} target="_blank" rel="noreferrer">Review PR</a></div>
       </li>)}</ul>
       {queue && <p className="mt-3 text-xs text-muted-foreground">Checked {formatSydneyDateTime(queue.checkedAt)} · Refreshes every minute</p>}
     </section>

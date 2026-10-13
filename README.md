@@ -45,7 +45,7 @@ Displayed times use Australia/Sydney. Stored timestamps are UTC.
 Factory remembers what it learns about your software. Before each run it ranks the active memories for the project, plus global ones, and adds the best within the project's character budget to the prompt. Ranking uses weight, outcomes and relevance to the ticket; pinned memories always go first. Memory is framed as context that may be outdated, never as permission.
 
 - **Teach it**: add conventions, architecture notes, gotchas and commands on the **Memory** page, over the API (`POST /api/v1/memories`), or via MCP (`factory_create_memory`).
-- **It learns**: at the end of a run Codex may write durable learnings. They become active project memories at low weight (20), or wait in **Suggested** when the project's auto-learn is off. Agents never write global memory. Rediscovering a learning raises its weight by 5, up to 60.
+- **It learns**: at the end of a run Codex may write durable learnings. They wait in **Needs review** as suggested project memories at low weight (20), linked to the run and ticket that produced them, and reach no prompt until a person accepts one. A project can opt in to using its own agent learnings without review. Agents never write global memory. Rediscovering a learning raises its weight by 5, up to 60.
 - **Outcomes tune it**: memories used by a run that reaches green CI gain score, and memories used by a failed run lose it. Agent memories that keep failing are archived automatically.
 - **You tune it**: edit content or kind, set weight 0 to 100, pin, archive or accept suggestions. Each project has a per-run budget. **Preview** shows the exact block a ticket would receive. Every change is audited with its actor and can be reverted.
 

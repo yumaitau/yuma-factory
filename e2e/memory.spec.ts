@@ -109,10 +109,12 @@ test("team memory can be taught, edited, pinned, archived, restored and reverted
 
     await page.getByText("Project settings", { exact: true }).click();
     await page.getByLabel("Memory budget per run (characters)").fill("4500");
-    await page.getByLabel(/Use agent learnings right away/).uncheck();
+    await expect(page.getByLabel(/Use agent learnings without review/)).not.toBeChecked();
+    await expect(page.getByText(`Applies to ${repo} only.`, { exact: false })).toBeVisible();
+    await page.getByLabel(/Use agent learnings without review/).check();
     await page.getByRole("button", { name: "Save settings" }).click();
-    await expect.poll(() => ({ ...db.prepare("SELECT memory_budget, auto_learn FROM projects WHERE id = ?").get(proj) }))
-      .toEqual({ memory_budget: 4500, auto_learn: 0 });
+    await expect.poll(() => ({ ...db.prepare("SELECT memory_budget, activate_learnings FROM projects WHERE id = ?").get(proj) }))
+      .toEqual({ memory_budget: 4500, activate_learnings: 1 });
     await page.reload();
     await expect(page.getByText(/of 4,500 characters/)).toBeVisible();
   } finally {

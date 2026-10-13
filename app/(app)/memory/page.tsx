@@ -9,7 +9,7 @@ import { MemoryList, ScopePicker, type MemoryGroup, type MemoryItem } from '@/co
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { getDb } from '@/lib/db';
-import { listMemories, memoriesForTicket, memoryCounts, memoryHistory, type Memory } from '@/lib/memory-store';
+import { listMemories, memoriesForTicket, memoryCounts, memoryHistory, memorySourceTickets, type Memory } from '@/lib/memory-store';
 import { ALL_PROJECTS, memoryInclusion, scopeOptions, selectionSize, statusCounts } from '@/lib/memory-view';
 import { listProjects } from '@/lib/queries';
 import { requireSession } from '@/lib/session';
@@ -49,6 +49,7 @@ async function MemoryView({ searchParams }: { searchParams: Promise<Search> }) {
   const rows = await listMemories(db, { projectId: project?.id ?? null, status });
   const inherited = project && status === 'active' ? await listMemories(db, { projectId: null, status: 'active' }) : [];
   const events = await memoryHistory(db, rows.map((row) => row.id));
+  const sources = await memorySourceTickets(db, rows.flatMap((row) => row.sourceTicketId ? [row.sourceTicketId] : []));
   // What a ticket with nothing relevant in it receives, ranked exactly as runs rank it.
   const typical = project ? await memoriesForTicket(db, project.id, '') : null;
   const preview = project && search.q !== undefined ? await memoriesForTicket(db, project.id, search.q) : null;
@@ -58,6 +59,7 @@ async function MemoryView({ searchParams }: { searchParams: Promise<Search> }) {
     scope: memory.projectId ? project?.repoFullName ?? memory.projectId : ALL_PROJECTS,
     inclusion: memoryInclusion(memory, included),
     history: events.filter((event) => event.memoryId === memory.id),
+    sourceTicket: sources.find((ticket) => ticket.id === memory.sourceTicketId) ?? null,
   });
   const reviewing = options.filter((option) => option.review > 0);
   const scopeLabel = project?.repoFullName ?? ALL_PROJECTS;
@@ -86,8 +88,8 @@ async function MemoryView({ searchParams }: { searchParams: Promise<Search> }) {
       ? [{ id: 'review', title: 'Waiting for your review',
           hint: 'Agents proposed these after their runs. Runs ignore them until you accept one; dismissing archives it.', items: rows.map(item),
           empty: project
-            ? project.autoLearn
-              ? 'Nothing to review. This project uses agent learnings right away; turn that off in Project settings to review them first.'
+            ? project.activateLearnings
+              ? 'Nothing to review. This project uses its agent learnings without review; turn that off in Project settings to review them first.'
               : 'Nothing to review. New agent learnings for this project will wait here.'
             : <>Agent learnings always belong to one project.{reviewLinks ? <> These projects have learnings waiting:{reviewLinks}</> : ' No project has learnings waiting.'}</> }]
       : [{ id: 'archived', title: 'Archived', hint: 'Never sent to agents. Restore one to use it again.', items: rows.map(item),
@@ -156,8 +158,12 @@ async function MemoryView({ searchParams }: { searchParams: Promise<Search> }) {
                   <Input name="memoryBudget" type="number" min={0} max={20000} step={500} defaultValue={project.memoryBudget} className="h-8 text-[13px] text-foreground" />
                 </label>
                 <label className="flex items-start gap-2">
-                  <input type="checkbox" name="autoLearn" defaultChecked={project.autoLearn} className="mt-0.5" />
-                  Use agent learnings right away (otherwise they wait in Needs review)
+                  <input type="checkbox" name="activateLearnings" defaultChecked={project.activateLearnings} className="mt-0.5" />
+                  <span>Use agent learnings without review
+                    <span className="mt-0.5 block text-muted-foreground">
+                      Applies to {project.repoFullName} only. When off, they wait in Needs review. Memories shared by all projects are always written by people.
+                    </span>
+                  </span>
                 </label>
                 <label className="flex items-start gap-2">
                   <input type="checkbox" name="autoApprovePlans" defaultChecked={project.autoApprovePlans} className="mt-0.5" />

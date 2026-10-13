@@ -14,6 +14,7 @@ import { AgentAvatar } from '@/components/factory/agent-avatar';
 import { PromptBubble, SessionCard, useLiveSessions } from '@/components/factory/session-card';
 import { LANE_ICONS, PR_ICONS, StatusIcon, prColor } from '@/components/factory/status-icon';
 import { cn } from '@/lib/utils';
+import { EvidenceList } from '@/components/factory/evidence-list';
 
 type Panel = TicketPanel & { viewerId: string };
 
@@ -141,6 +142,10 @@ function IssueView({ panel, reload }: { panel: Panel; reload: () => Promise<void
           <PrIcon aria-hidden className={cn('size-3', prColor(pr))} />PR {pr}</a></Property>}
         {ci && <Property label="CI">{ci}</Property>}
       </dl>
+      {card.evidence && <section aria-labelledby="evidence-heading" className="mt-6">
+        <h3 id="evidence-heading" className="mb-2 text-[13px] font-medium">Evidence</h3>
+        <EvidenceList gate={card.evidence} />
+      </section>}
       <section aria-label="Agent sessions" className="mt-6">
         <h3 className="mb-2 text-[13px] font-medium">Activity</h3>
         {!sessions.length && <p className="text-[13px] text-muted-foreground">No agent has worked on this ticket yet.</p>}

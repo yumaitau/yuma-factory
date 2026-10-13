@@ -254,6 +254,8 @@ export const runs = sqliteTable(
     attempt: integer("attempt").notNull().default(1),
     // Set when a run fails: retry | retry_once | human (lib/run-retry.ts).
     failureKind: text("failure_kind"),
+    // Last seen head commit of pullRequestUrl. Evidence recorded on any other commit is stale.
+    pullRequestHeadSha: text("pull_request_head_sha"),
   },
   (table) => [
     index("runs_ticket_idx").on(table.ticketId),
@@ -293,6 +295,33 @@ export const runActivities = sqliteTable(
     uniqueIndex("run_activities_seq_uidx").on(table.runId, table.seq),
     uniqueIndex("run_activities_source_uidx").on(table.runId, table.sourceKey),
     index("run_activities_ticket_idx").on(table.ticketId),
+  ],
+);
+
+/**
+ * Review evidence for a run: a check, command, preview or note, pinned to the commit it ran against.
+ * Only records on the pull request's current head count toward review (lib/review-evidence.ts).
+ */
+export const runEvidence = sqliteTable(
+  "run_evidence",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    ticketId: text("ticket_id").notNull().references(() => tickets.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // check|command|preview|note
+    name: text("name").notNull(),
+    sourceSha: text("source_sha").notNull(),
+    environment: text("environment"),
+    startedAt: integer("started_at", { mode: "timestamp" }),
+    finishedAt: integer("finished_at", { mode: "timestamp" }),
+    result: text("result").notNull().default("unknown"), // passed|failed|skipped|unknown
+    url: text("url"),
+    logKey: text("log_key"),
+    recordedAt: integer("recorded_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("run_evidence_uidx").on(table.runId, table.sourceSha, table.kind, table.name),
+    index("run_evidence_ticket_idx").on(table.ticketId),
   ],
 );
 

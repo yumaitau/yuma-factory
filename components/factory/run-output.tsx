@@ -36,7 +36,7 @@ export function RunOutputView({ runId, initial }: { runId: string; initial: RunO
     if (follow && viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
   }, [output.log, follow]);
   const running = output.status === 'running' || output.status === 'queued';
-  return <section aria-label="Codex run output" className="min-w-0">
+  return <section aria-label="Transcript and run status" className="min-w-0">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
       <div className="text-sm"><span className="font-semibold capitalize">{output.waitingReason ? 'Waiting' : output.status}</span><span className="ml-3 text-muted-foreground" role="status">{connection}</span>
         {output.outputUpdatedAt && <p className="mt-1 text-xs text-muted-foreground">Last output {formatSydneyDateTime(output.outputUpdatedAt)}</p>}</div>
@@ -47,10 +47,10 @@ export function RunOutputView({ runId, initial }: { runId: string; initial: RunO
       </div>
     </div>
     {output.waitingReason && <p className="mb-4 text-sm" role="status">{output.waitingReason}</p>}
-    <pre ref={viewport} tabIndex={0} aria-label="Execution log" className="h-[60vh] min-h-72 overflow-auto whitespace-pre-wrap wrap-anywhere rounded-lg border bg-muted/40 p-4 font-mono text-xs leading-6 focus-visible:outline-2 focus-visible:outline-ring"
+    <pre ref={viewport} tabIndex={0} aria-label="Run transcript" className="h-[60vh] min-h-72 overflow-auto whitespace-pre-wrap wrap-anywhere rounded-lg border bg-muted/40 p-4 font-mono text-xs leading-6 focus-visible:outline-2 focus-visible:outline-ring"
       onScroll={() => { const el = viewport.current; if (el && el.scrollHeight - el.scrollTop - el.clientHeight > 60) setFollow(false); }}>
       {output.log || (running ? 'Waiting for the first Codex event…' : 'No output was recorded for this run.')}
     </pre>
-    <p className="mt-3 max-w-prose text-xs text-muted-foreground">Commands, command results, file changes and Codex messages appear as execution events arrive. Showing the latest 60,000 characters. Closing this page leaves the run working.</p>
+    <p className="mt-3 max-w-prose text-xs text-muted-foreground">Commands, command results, file changes and Codex messages appear as execution events arrive. Showing the latest 60,000 characters. Closing this page leaves the run working. This transcript is the agent’s own account. It is not review evidence; checks on the pull request’s current head are.</p>
   </section>;
 }

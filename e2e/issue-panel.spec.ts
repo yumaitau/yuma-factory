@@ -120,8 +120,8 @@ test('issue panel shows agent sessions, takes a follow-up and follows live activ
     await expect(page.getByRole('tab', { name: 'Session' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByText('Opened a pull request that fixes the totals.')).toBeVisible();
     await page.screenshot({ path: 'test-results/run-session.png' });
-    await page.getByRole('tab', { name: 'Raw log' }).click();
-    await expect(page.getByLabel('Execution log')).toContainText('First attempt log');
+    await page.getByRole('tab', { name: 'Transcript' }).click();
+    await expect(page.getByLabel('Run transcript', { exact: true })).toContainText('First attempt log');
   } finally {
     await page.goto('about:blank');
     db.prepare('DELETE FROM projects WHERE id = ?').run(proj);

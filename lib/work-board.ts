@@ -3,6 +3,7 @@ import { isLowRisk as isLowRiskFor, ticketRisk } from '@/shared/ticket-risk';
 import type { SessionState } from '@/lib/run-session';
 import { nextRetry } from '@/lib/run-retry';
 import { formatSydneyTime } from '@/lib/datetime';
+import { evidenceGate, type EvidenceGate } from '@/lib/review-evidence';
 
 const isLowRisk = (labels: string[]) => isLowRiskFor(labels, LABEL_PREFIX);
 
@@ -26,6 +27,8 @@ export type WorkCard = {
   runAttempt?: number;
   runFailureKind?: string | null;
   runFollowUp?: boolean;
+  // Checks recorded for the latest run, judged against its PR's current head (lib/review-evidence.ts).
+  evidence?: EvidenceGate | null;
 };
 
 // Attention and review lead. Integrated is last so a closed issue is not the headline.
@@ -68,12 +71,25 @@ export function deliveryState(card: WorkCard): { id: string; label: string } {
   return { id: 'open', label: 'Open' };
 }
 
+/**
+ * A finished implementation with an open pull request claims Ready for review only with passing
+ * checks on its current head. The log saying success is not evidence. Null when no gate applies.
+ */
+export function reviewEvidence(card: WorkCard): EvidenceGate | null {
+  if (card.runStatus !== 'succeeded' || card.runMode === 'plan' || !card.pullRequestUrl || card.pullRequestState === 'merged') return null;
+  return card.evidence ?? evidenceGate([], null);
+}
+
 export function workLane(card: WorkCard) {
   if (card.runStatus === 'running' || card.stage === 'in_progress') return card.waitingReason ? 'waiting' : 'running';
   if (card.stage === 'done' || card.githubState !== 'open') return 'done';
   // A failure waits in Queued while it has automatic retries left.
   if (card.runStatus === 'failed') return scheduledRetry(card) ? 'queued' : 'attention';
-  if (card.stage === 'review' || card.runStatus === 'succeeded') return 'review';
+  if (card.stage === 'review' || card.runStatus === 'succeeded') {
+    const gate = reviewEvidence(card);
+    if (!gate || gate.state === 'ready') return 'review';
+    return gate.state === 'pending' || gate.state === 'unchecked' ? 'waiting' : 'attention';
+  }
   // Stopped attempts require a manual decision, just like automationCandidates.
   if (card.runStatus === 'cancelled') return 'intake';
   // A queued attempt is queued.
@@ -97,6 +113,12 @@ export function ciLabel(card: WorkCard) {
 
 export function workReason(card: WorkCard) {
   const lane = workLane(card);
+  const gate = reviewEvidence(card);
+  if (gate && gate.state !== 'ready' && (lane === 'waiting' || lane === 'attention')) {
+    if (gate.state === 'pending' || gate.state === 'unchecked') return `Run completed. ${gate.reason}`;
+    if (card.runOutcome?.startsWith('No CI registered')) return `${gate.reason} No CI on this repository, so Factory did not merge. Review the pull request yourself. Reviewing it does not deploy.`;
+    return gate.state === 'failed' ? `${gate.reason} Not ready for review until checks pass on this commit.` : gate.reason;
+  }
   if (lane === 'waiting') return card.waitingReason!;
   if (lane === 'running') return card.completionPending
     ? (isLowRisk(card.labels) ? 'CI green. Merging low-risk PR and closing GitHub issue.' : `CI green. Syncing ${LABELS.done} and closing GitHub issue.`)
@@ -110,9 +132,10 @@ export function workReason(card: WorkCard) {
   }
   if (lane === 'review' && card.runOutcome?.startsWith('No CI registered')) return 'No CI on this repository, so Factory did not merge. Review the pull request yourself. Reviewing it does not deploy.';
   if (lane === 'review' && card.runMode === 'plan') return 'Plan proposed. Approve it on the Plans page to create subtasks. That approval does not merge or deploy.';
+  const passed = gate ? ` ${gate.reason}` : '';
   if (lane === 'review') return isLowRisk(card.labels)
-    ? 'Run completed. The low-risk merge did not finish. Review the pull request. Reviewing it does not deploy.'
-    : 'Run completed. Review the change. Merging and deploying are separate decisions.';
+    ? `Run completed.${passed} The low-risk merge did not finish. Review the pull request. Reviewing it does not deploy.`
+    : `Run completed.${passed} Review the change. Merging and deploying are separate decisions.`;
   if (lane === 'done') return card.githubState === 'closed'
     ? 'GitHub issue closed. That records integration, not a release and not product acceptance.'
     : 'Marked integrated. Confirm the pull request and any release separately.';

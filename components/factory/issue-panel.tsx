@@ -15,6 +15,7 @@ import { PromptBubble, SessionCard, useLiveSessions } from '@/components/factory
 import { LANE_ICONS, PR_ICONS, StatusIcon, prColor } from '@/components/factory/status-icon';
 import { cn } from '@/lib/utils';
 import { EvidenceList } from '@/components/factory/evidence-list';
+import { ReviewActions } from '@/components/factory/review-actions';
 
 type Panel = TicketPanel & { viewerId: string };
 
@@ -145,6 +146,10 @@ function IssueView({ panel, reload }: { panel: Panel; reload: () => Promise<void
       {card.evidence && <section aria-labelledby="evidence-heading" className="mt-6">
         <h3 id="evidence-heading" className="mb-2 text-[13px] font-medium">Evidence</h3>
         <EvidenceList gate={card.evidence} />
+      </section>}
+      {card.runId && card.pullRequestUrl && card.runStatus !== 'running' && card.pullRequestState !== 'closed' && <section aria-labelledby="review-actions-heading" className="mt-6">
+        <h3 id="review-actions-heading" className="mb-2 text-[13px] font-medium">Review</h3>
+        <ReviewActions key={card.runId} runId={card.runId} onChange={() => void reload()} />
       </section>}
       <section aria-label="Agent sessions" className="mt-6">
         <h3 className="mb-2 text-[13px] font-medium">Activity</h3>

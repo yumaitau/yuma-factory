@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/ids";
 import { getGithubApp, getInstallationToken } from "@/lib/github";
 import { markGithubIssueDone } from '@/lib/github-completion';
+import { mergeOnce, reviewContext } from '@/lib/review-merge';
 import { LABELS } from '@/lib/brand';
 import { parsePullRef } from '@/lib/work-review';
 import {
@@ -202,8 +203,11 @@ export async function completeCodexRun(runId: string, result: RunResult) {
       const [owner, repo] = context.project.repoFullName.split('/');
       const client = await getGithubApp().getInstallationOctokit(context.installation.installationId);
       const pull = parsePullRef(result.pullRequestUrl ?? null, context.project.repoFullName);
+      const review = await reviewContext(db, runId);
+      // A low-risk merge goes through the serialised path and is recorded as Factory's, with its SHA.
       completedLabels = await markGithubIssueDone(client, owner, repo, context.ticket.githubIssueNumber, {
         pullNumber: pull?.number, sha: result.ciHeadSha,
+        merge: async (_pullNumber, sha) => review && mergeOnce(db, client, review, sha, { actor: 'factory' }),
       });
     } catch (error) {
       // A finished run must never strand its agent: record completion, park the

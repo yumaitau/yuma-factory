@@ -7,7 +7,7 @@ import { secretMatches } from "@/lib/factory-auth";
 import { getInstallationToken } from "@/lib/github";
 import { getTicketWithContext } from "@/lib/queries";
 import { validId, type AccountStatus } from "@/shared/codex";
-import { mintRunToken } from "@/lib/run-token";
+import { mintMergeToken, mintRunToken } from "@/lib/run-token";
 
 /** Renew only the installation credential belonging to an active runner job. */
 export async function POST(request: Request) {
@@ -44,7 +44,9 @@ export async function POST(request: Request) {
   if (!await reserveRunAccount(accountId, run.requestedByUserId, id, action === "resume", db))
     return Response.json({ error: "Subscription is busy, disabled or needs reconnecting. Recovery will retry." }, { status: 409 });
   // The run token opens this run's live channel (/api/runs/mcp); it dies with the run.
-  return Response.json({ token, issuedAt: Date.now(), runToken: mintRunToken(id, env.SANDBOX_RUNNER_SECRET!) }, {
+  // The merge token lets only the bridge ask for a low-risk merge (/api/runs/merge).
+  return Response.json({ token, issuedAt: Date.now(), runToken: mintRunToken(id, env.SANDBOX_RUNNER_SECRET!),
+    mergeToken: mintMergeToken(id, env.SANDBOX_RUNNER_SECRET!) }, {
     headers: { "Cache-Control": "no-store" },
   });
 }

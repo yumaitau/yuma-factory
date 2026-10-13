@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { findExistingRun } from "./resume.mjs";
-import { evaluateCI, finishCommitCI, isAccountBlockedCI, isCiConfigPath, finishWithGreenCI, isLowRisk, isPassingConclusion, labelNames, latestWorkflows, loadRequiredChecks, mergeGreenPullRequest } from "./ci.mjs";
+import { evaluateCI, finishCommitCI, isAccountBlockedCI, isCiConfigPath, finishWithGreenCI, isLowRisk, isPassingConclusion, labelNames, latestWorkflows, loadRequiredChecks, requestFactoryMerge } from "./ci.mjs";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
@@ -452,6 +452,24 @@ async function run() {
   const channel = typeof req.runToken === "string" && typeof req.factoryUrl === "string" && /^https?:\/\/[^\s"]+$/.test(req.factoryUrl)
     ? `${req.factoryUrl.replace(/\/+$/, "")}/api/runs/activities` : null;
   if (channel) sensitive.add(req.runToken);
+  // Low-risk merges go through Factory, which records them and serialises them with people's merges.
+  // The merge token never reaches the agent; only this root-owned bridge can ask for a merge.
+  const mergeChannel = typeof req.mergeToken === "string" && typeof req.factoryUrl === "string" && /^https?:\/\/[^\s"]+$/.test(req.factoryUrl)
+    ? `${req.factoryUrl.replace(/\/+$/, "")}/api/runs/merge` : null;
+  if (mergeChannel) sensitive.add(req.mergeToken);
+  const mergeLowRisk = (pull, sha) => requestFactoryMerge({
+    post: mergeChannel && (async (body) => {
+      const response = await fetch(mergeChannel, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${req.mergeToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60000),
+      });
+      return { status: response.status, data: await response.json().catch(() => ({})) };
+    }),
+    pullRequestUrl: pull.html_url,
+    sha,
+  });
   // Keys are unique per bridge process, so a recovered attempt never collides with an earlier one.
   const activityPrefix = randomUUID().slice(0, 8);
   let activityCount = 0;
@@ -882,7 +900,7 @@ async function run() {
             }
             let merged;
             try {
-              merged = await mergeGreenPullRequest({ github, pullNumber: pull.number, sha });
+              merged = await mergeLowRisk(pull, sha);
             } catch (error) {
               await progress(`Low-risk merge failed: ${error.message}. PR left open for review.`);
               await closeGitHubIssue();
@@ -891,7 +909,7 @@ async function run() {
             }
             if (merged.result === "blocked" || !merged.sha) {
               await progress(merged.result === "blocked"
-                ? "Low-risk merge blocked by GitHub. PR left open for review."
+                ? "Low-risk merge blocked by GitHub or Factory. PR left open for review."
                 : "Merge commit is unavailable. Main pipeline was not watched.");
               await closeGitHubIssue();
               await progress("CI green on the current PR head. GitHub issue closed.");
@@ -907,9 +925,9 @@ async function run() {
               await progress("No CI in this repository. Not low risk, so the PR is left for review.");
               return false;
             }
-            const merged = await mergeGreenPullRequest({ github, pullNumber: pull.number, sha });
+            const merged = await mergeLowRisk(pull, sha);
             if (merged.result === "blocked") {
-              await progress("No CI in this repository. Low-risk merge blocked by GitHub. PR left open for review.");
+              await progress("No CI in this repository. Low-risk merge blocked by GitHub or Factory. PR left open for review.");
               return false;
             }
             await closeGitHubIssue();

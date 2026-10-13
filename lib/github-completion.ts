@@ -29,20 +29,23 @@ export async function ensureRepoLabel(client: GithubClient, params: { owner: str
   }
 }
 
-async function mergeGreenPullRequest(client: GithubClient, owner: string, repo: string, pullNumber: number, sha: string) {
+export type MergeResult = { result: 'merge' | 'already-merged' | 'blocked'; sha: string | null };
+
+/** SHA-pinned merge commit. Refuses (throws) when the head is no longer `sha`. */
+export async function mergeGreenPullRequest(client: GithubClient, owner: string, repo: string, pullNumber: number, sha: string): Promise<MergeResult> {
   const params = { owner, repo, pull_number: pullNumber, request: { signal: AbortSignal.timeout(20_000) } };
   const { data: pr } = await client.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', params);
-  if (pr.merged) return 'already-merged' as const;
+  if (pr.merged) return { result: 'already-merged', sha: pr.merge_commit_sha ?? null };
   if (pr.state !== 'open') throw new Error('Pull request closed before merge. Ticket left open.');
   if (pr.head.sha !== sha) throw new Error('PR head changed before merge. Ticket left open.');
   // Merge commit only: every PR commit lands unchanged. Never squash or rebase;
   // a repository that disallows merge commits leaves the PR for review.
   try {
     const { data } = await client.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', { ...params, sha, merge_method: 'merge' });
-    return data.merged ? 'merge' as const : 'blocked' as const;
+    return data.merged ? { result: 'merge', sha: data.sha ?? null } : { result: 'blocked', sha: null };
   } catch (error) {
     if (statusOf(error) === 409) throw new Error('PR head changed before merge. Ticket left open.');
-    if (statusOf(error) === 405 || statusOf(error) === 422) return 'blocked' as const;
+    if (statusOf(error) === 405 || statusOf(error) === 422) return { result: 'blocked', sha: null };
     throw error;
   }
 }
@@ -83,8 +86,12 @@ export async function setGithubIssueReady(client: GithubClient, owner: string, r
   return labelNames(issue.labels);
 }
 
-/** Idempotent: retries retain unrelated labels and only close after the done label is applied. */
-export async function markGithubIssueDone(client: GithubClient, owner: string, repo: string, issueNumber: number, options?: { pullNumber?: number; sha?: string }) {
+/**
+ * Idempotent: retries retain unrelated labels and only close after the done label is applied.
+ * Low-risk policy then merges the CI-confirmed SHA; `merge` routes that through the recorded, serialised path.
+ */
+export async function markGithubIssueDone(client: GithubClient, owner: string, repo: string, issueNumber: number,
+  options?: { pullNumber?: number; sha?: string; merge?: (pullNumber: number, sha: string) => Promise<unknown> }) {
   const params = { owner, repo, issue_number: issueNumber, request: { signal: AbortSignal.timeout(20_000) } };
   await ensureRepoLabel(client, params, LABELS.done, '2DA44E', `Completed by ${APP_NAME}`);
   await client.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', { ...params, labels: [LABELS.done] });
@@ -96,7 +103,7 @@ export async function markGithubIssueDone(client: GithubClient, owner: string, r
   if (data.state !== 'closed') throw new Error('GitHub did not confirm issue closure.');
   if (isLowRisk(labelNames(issue.labels), LABEL_PREFIX) && options?.pullNumber && options.sha) {
     try {
-      await mergeGreenPullRequest(client, owner, repo, options.pullNumber, options.sha);
+      await (options.merge ?? ((pullNumber, sha) => mergeGreenPullRequest(client, owner, repo, pullNumber, sha)))(options.pullNumber, options.sha);
     } catch {
       // Issue closure already succeeded; a blocked or drifted PR stays in review.
     }

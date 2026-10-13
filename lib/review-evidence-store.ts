@@ -1,6 +1,6 @@
 import 'server-only';
-import { and, desc, eq, sql } from 'drizzle-orm';
-import { runEvidence, runs } from '@/db/schema';
+import { and, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { reviewAcceptances, runEvidence, runs } from '@/db/schema';
 import { newId } from '@/lib/ids';
 import { checkEvidence, evidenceGate, type Evidence, type EvidenceGate } from '@/lib/review-evidence';
 import type { Db } from '@/lib/queries';
@@ -43,16 +43,24 @@ export async function recordEvidence(db: Db, run: { id: string; ticketId: string
   await db.batch([first, ...rest]);
 }
 
-/** Remember the PR head Factory last saw. Evidence on any other commit is stale from now on. */
+/** A new head clears the current acceptance. The superseded row stays in history. */
+function supersede(db: Db, pullRequestUrl: SQL | string, sha: string) {
+  return db.update(reviewAcceptances).set({ status: 'superseded', supersededAt: new Date() }).where(and(
+    eq(reviewAcceptances.pullRequestUrl, pullRequestUrl), eq(reviewAcceptances.status, 'active'), ne(reviewAcceptances.headSha, sha)));
+}
+
+/** Remember the PR head Factory last saw. Evidence and acceptances on any other commit are stale from now on. */
 export async function observeHead(db: Db, runId: string, sha: string) {
-  await db.update(runs).set({ pullRequestHeadSha: sha })
-    .where(and(eq(runs.id, runId), sql`${runs.pullRequestHeadSha} is not ${sha}`));
+  await db.batch([
+    db.update(runs).set({ pullRequestHeadSha: sha }).where(and(eq(runs.id, runId), sql`${runs.pullRequestHeadSha} is not ${sha}`)),
+    supersede(db, sql`(select pull_request_url from runs where id = ${runId})`, sha),
+  ]);
 }
 
 /** A push reported by GitHub: every run on that pull request now has a new head. */
 export async function observePullHead(db: Db, pullRequestUrl: string, sha: string) {
   if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(pullRequestUrl) || !/^[a-f0-9]{40}$/.test(sha)) return;
-  await db.update(runs).set({ pullRequestHeadSha: sha }).where(eq(runs.pullRequestUrl, pullRequestUrl));
+  await db.batch([db.update(runs).set({ pullRequestHeadSha: sha }).where(eq(runs.pullRequestUrl, pullRequestUrl)), supersede(db, pullRequestUrl, sha)]);
 }
 
 /** Observe the head, record its checks, and return the gate over everything the run has recorded. */

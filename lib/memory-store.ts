@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { memories, memoryEvents, projects, runMemories } from '@/db/schema';
+import { memories, memoryEvents, projects, runMemories, tickets } from '@/db/schema';
 import { newId } from '@/lib/ids';
 import type { Db } from '@/lib/queries';
 import {
@@ -49,12 +49,15 @@ export async function recordRunMemories(db: Db, runId: string, memoryIds: string
   }
 }
 
-/** Post-run capture. Agent learnings are always project-scoped, so one repo cannot steer another. */
+/**
+ * Post-run capture. Agent learnings are always project-scoped, so one repo cannot steer another, and wait for
+ * review unless that project opted in. Rediscovery never changes an existing memory's status.
+ */
 export async function captureLearnings(db: Db, input: { projectId: string; runId: string; ticketId: string; raw: unknown }) {
   const learnings = parseLearnings(input.raw);
   if (!learnings.length) return 0;
-  const project = await db.select({ autoLearn: projects.autoLearn }).from(projects).where(eq(projects.id, input.projectId)).get();
-  const status = project?.autoLearn === false ? 'suggested' : 'active';
+  const project = await db.select({ activate: projects.activateLearnings }).from(projects).where(eq(projects.id, input.projectId)).get();
+  const status = project?.activate ? 'active' : 'suggested';
   for (const learning of learnings) {
     const now = new Date();
     // One run may learn or reinforce a memory once; repeating itself is not rediscovery.
@@ -157,8 +160,21 @@ export async function updateMemory(db: Db, id: string, patch: MemoryPatch, actor
   const after = Object.fromEntries(keys.map((key) => [key, next[key]]));
   const changes = Object.fromEntries([...keys, ...(next.contentKey ? ['contentKey' as const] : [])].map((key) => [key, next[key]]));
   const [updated] = await db.update(memories).set({ ...changes, updatedAt: new Date() }).where(eq(memories.id, id)).returning();
-  await logEvent(db, id, actor, 'edited', before, after);
+  // Review decisions are named in the audit trail; anything else is an edit.
+  const review = current.status === 'suggested' ? next.status : undefined;
+  const decision = review === 'active' ? 'accepted' : review === 'archived' ? 'dismissed' : 'edited';
+  await logEvent(db, id, actor, decision, before, after);
   return updated;
+}
+
+/** The tickets agent learnings came from, so a reviewer can open the work behind a suggestion. */
+export async function memorySourceTickets(db: Db, ticketIds: string[]) {
+  const ids = [...new Set(ticketIds)];
+  const rows = [];
+  for (let offset = 0; offset < ids.length; offset += 90)
+    rows.push(...await db.select({ id: tickets.id, number: tickets.githubIssueNumber, title: tickets.title, url: tickets.htmlUrl })
+      .from(tickets).where(inArray(tickets.id, ids.slice(offset, offset + 90))).all());
+  return rows;
 }
 
 /** Roll a memory back to the values it had before one audited edit. */
@@ -168,10 +184,10 @@ export async function revertMemoryEvent(db: Db, eventId: string, actor: string) 
   return updateMemory(db, event.memoryId, JSON.parse(event.before) as MemoryPatch, actor);
 }
 
-export async function setProjectMemorySettings(db: Db, projectId: string, settings: { memoryBudget?: number; autoLearn?: boolean; autoApprovePlans?: boolean }) {
+export async function setProjectMemorySettings(db: Db, projectId: string, settings: { memoryBudget?: number; activateLearnings?: boolean; autoApprovePlans?: boolean }) {
   const next: Partial<typeof projects.$inferInsert> = {};
   if (settings.memoryBudget !== undefined) next.memoryBudget = Math.max(0, Math.min(20_000, Math.round(settings.memoryBudget) || 0));
-  if (settings.autoLearn !== undefined) next.autoLearn = settings.autoLearn;
+  if (settings.activateLearnings !== undefined) next.activateLearnings = settings.activateLearnings;
   if (settings.autoApprovePlans !== undefined) next.autoApprovePlans = settings.autoApprovePlans;
   if (!Object.keys(next).length) return;
   await db.update(projects).set({ ...next, updatedAt: new Date() }).where(eq(projects.id, projectId));

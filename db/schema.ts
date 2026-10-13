@@ -132,8 +132,9 @@ export const projects = sqliteTable(
     issuesSyncedAt: integer("issues_synced_at", { mode: "timestamp" }),
     // Characters of memory injected into each run prompt.
     memoryBudget: integer("memory_budget").notNull().default(6000),
-    // Agents record learnings as active, low-weight memories.
-    autoLearn: integer("auto_learn", { mode: "boolean" }).notNull().default(true),
+    // Opt-in: this project's agent learnings skip review and go active. Off by default, so one bad run
+    // cannot teach later runs unreviewed. The retired auto_learn column stays in the table, unread.
+    activateLearnings: integer("activate_learnings", { mode: "boolean" }).notNull().default(false),
     // Planner breakdowns create subtasks without waiting for approval.
     autoApprovePlans: integer("auto_approve_plans", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),

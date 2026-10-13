@@ -16,7 +16,8 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 export type MemoryEvent = typeof memoryEvents.$inferSelect;
-export type MemoryItem = Memory & { scope: string; inclusion: Inclusion; history: MemoryEvent[] };
+export type SourceTicket = { id: string; number: number; title: string; url: string };
+export type MemoryItem = Memory & { scope: string; inclusion: Inclusion; history: MemoryEvent[]; sourceTicket?: SourceTicket | null };
 export type MemoryGroup = { id: string; title: string; hint?: ReactNode; items: MemoryItem[]; inherited?: boolean; empty: ReactNode };
 
 const chip = 'inline-flex h-5 max-w-full min-w-0 items-center gap-1 rounded border border-border bg-card px-1.5 text-[11px] leading-none text-muted-foreground';
@@ -177,6 +178,11 @@ function MemoryRow({ memory, inherited }: { memory: MemoryItem; inherited?: bool
         <span aria-hidden>·</span>
         <span>{sourceLabel(memory.source)}{memory.sourceRunId &&
           <> in <Link href={`/work/runs/${memory.sourceRunId}`} className="underline hover:text-foreground">this run →</Link></>}</span>
+        {memory.sourceTicket && <>
+          <span aria-hidden>·</span>
+          <span className="min-w-0 truncate">on <a href={memory.sourceTicket.url} target="_blank" rel="noreferrer" title={memory.sourceTicket.title}
+            className="underline hover:text-foreground">#{memory.sourceTicket.number} {memory.sourceTicket.title}</a></span>
+        </>}
       </span>
     </div>
     {error && <p role="alert" className="mt-1.5 text-xs text-status-attention">{error}</p>}

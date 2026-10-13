@@ -55,7 +55,7 @@ export async function memorySettingsAction(formData: FormData) {
   }).parse(Object.fromEntries(formData));
   await setProjectMemorySettings(await getDb(), input.projectId, {
     memoryBudget: input.memoryBudget,
-    autoLearn: formData.get("autoLearn") === "on",
+    activateLearnings: formData.get("activateLearnings") === "on",
     autoApprovePlans: formData.get("autoApprovePlans") === "on",
   });
   revalidatePath("/memory");

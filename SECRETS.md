@@ -55,6 +55,6 @@ Codex logins and Claude subscription tokens are connected through the app and en
 - Google OAuth redirect URI: `{BETTER_AUTH_URL}/api/auth/callback/google`.
 - GitHub App callback URL: `{BETTER_AUTH_URL}/api/github/callback`.
 - GitHub App webhook URL: `{BETTER_AUTH_URL}/api/github/webhook`. Subscribe to **Issues** events.
-- GitHub App permissions: Contents, Issues and Pull requests read/write; Metadata, Administration, Checks, Commit statuses and Actions read.
+- GitHub App permissions: Contents, Issues and Pull requests read/write; Metadata, Administration, Checks, Commit statuses and Actions read. Actions read/write is optional: it lets Factory re-run CI jobs that GitHub blocked for billing or quota once the block is lifted.
 
 Device-code sign-in uses the official Codex authorization page. Claude subscriptions use a long-lived token from `claude setup-token` (Claude Pro or Max); Anthropic API keys are refused. Each subscription authorizes its own login. Owners control whether other team members may assign work to it.

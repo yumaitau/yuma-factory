@@ -125,11 +125,17 @@ export const PENDING_CI_MS = 2 * 60 * 60_000;
 // Repairs in a row that change nothing before the PR is left for a human.
 export const MAX_IDLE_REPAIRS = 3;
 
-// GitHub refuses to start jobs when the account's Actions billing is blocked.
+// GitHub refuses to start or finish jobs when an account or repository limit is hit.
 // No code change can fix that, so repairing only burns the subscription.
-const ACCOUNT_BLOCKED_CI = /job was not started because recent account payments have failed|spending limit needs to be increased/i;
-export function isAccountBlockedCI(diagnostics) {
-  return ACCOUNT_BLOCKED_CI.test(diagnostics ?? "");
+const GITHUB_BLOCKS = [
+  [/recent account payments have failed|spending limit needs to be increased|Actions budget|budget is preventing further use/i,
+    "the account's Actions billing, budget or spending limit is blocking jobs"],
+  [/Artifact storage quota has been hit/i, "the repository's Actions artifact storage quota is full"],
+  [/The job was not started because/i, "GitHub did not start the jobs"],
+];
+/** Why GitHub, not the code, failed CI; null when the failure is the code's. */
+export function githubBlockReason(diagnostics) {
+  return GITHUB_BLOCKS.find(([pattern]) => pattern.test(diagnostics ?? ""))?.[1] ?? null;
 }
 
 /**

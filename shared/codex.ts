@@ -23,6 +23,8 @@ export type RunResult = {
   pullRequestUrl?: string;
   ciHeadSha?: string;
   issueClosed?: boolean;
+  // No change was needed: a second agent confirmed the work is on the default branch, and the runner closed the issue.
+  alreadyDone?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   accountStatus?: AccountStatus;

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateCI, finishCommitCI, isAccountBlockedCI, isCiConfigPath, MAX_IDLE_REPAIRS, isReviewBot, finishWithGreenCI, isLowRisk, latestWorkflows, loadRequiredChecks, requestFactoryMerge, requiredChecks } from "../sandbox-runner/scripts/ci.mjs";
+import { evaluateCI, finishCommitCI, githubBlockReason, isCiConfigPath, MAX_IDLE_REPAIRS, isReviewBot, finishWithGreenCI, isLowRisk, latestWorkflows, loadRequiredChecks, requestFactoryMerge, requiredChecks } from "../sandbox-runner/scripts/ci.mjs";
 
 test("CI requires reported checks and waits for pending work", () => {
   assert.equal(evaluateCI([], [], []).state, "pending");
@@ -341,8 +341,11 @@ test("repairs that change nothing stop the run; a pushed repair resets the count
   assert.equal(repairs, 3 + MAX_IDLE_REPAIRS);
 });
 
-test("GitHub billing blocks are recognised as unfixable CI failures", () => {
-  assert.ok(isAccountBlockedCI(JSON.stringify([{ message: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings" }])));
-  assert.equal(isAccountBlockedCI("test: failure\nexpected 1 to equal 2"), false);
-  assert.equal(isAccountBlockedCI(undefined), false);
+test("GitHub billing, budget and quota blocks are recognised as unfixable CI failures", () => {
+  assert.match(githubBlockReason(JSON.stringify([{ message: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings" }])), /billing/);
+  assert.match(githubBlockReason("The job was not started because an Actions budget is preventing further use."), /budget/);
+  assert.match(githubBlockReason("Error: Failed to CreateArtifact: Artifact storage quota has been hit. Unable to upload any new artifacts."), /artifact storage/);
+  assert.match(githubBlockReason("The job was not started because the runner group is disabled."), /did not start/);
+  assert.equal(githubBlockReason("test: failure\nexpected 1 to equal 2"), null);
+  assert.equal(githubBlockReason(undefined), null);
 });

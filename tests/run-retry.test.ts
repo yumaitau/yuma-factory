@@ -39,6 +39,10 @@ test('runner failures that need a person are never retried; agent output failure
   // Stopped and finished runs are never failures.
   assert.equal(failureKind({ status: 'cancelled', log: 'Stopped by user.' }, 'implement'), null);
   assert.equal(failureKind({ status: 'succeeded', log: 'Done' }, 'implement'), null);
+  // GitHub refusing to run CI is re-checked later, not repaired and not left for a person.
+  assert.equal(failureKind(failed('GitHub did not run CI jobs: the repository\'s Actions artifact storage quota is full. Fix it in GitHub settings.', { retryable: false }), 'implement'), 'wait');
+  assert.equal(failureKind(failed('GitHub did not run CI jobs: budget.', { retryable: false, accountStatus: { status: 'disconnected' } }), 'implement'), 'human');
+  assert.equal(failureKind(failed('CI cannot be fixed from this repository: needs a workflow change. PR left open for review; ticket left open.', { retryable: false }), 'implement'), 'human');
   // Only the end of the log decides; an old line earlier in a long log does not.
   assert.equal(failureKind(failed(`Codex produced no file changes.${'x'.repeat(FAILURE_TAIL)}\nBilling blocked.`, { retryable: false }), 'implement'), 'human');
 });
@@ -48,6 +52,7 @@ test('the messages failureKind matches still exist in the runner', () => {
   assert.match(runner, /produced no file changes/);
   assert.match(runner, /CI still failing after \$\{MAX_IDLE_REPAIRS\} repairs that changed nothing/);
   assert.match(runner, /Planner did not write a valid plan file/);
+  assert.match(runner, /GitHub did not run CI jobs: \$\{block\}/);
   assert.match(readFileSync(new URL('../lib/agent/run.ts', import.meta.url), 'utf8'), /Planner returned an invalid proposal/);
 });
 
@@ -55,7 +60,7 @@ test('a failure gets three retries at 5, 20 and 60 minutes, so at most four atte
   const finishedAt = new Date('2026-10-10T03:00:00Z');
   const run = { status: 'failed', attempt: 1, failureKind: 'retry', followUp: false, finishedAt };
   assert.equal(MAX_AUTO_RETRIES, 3);
-  assert.deepEqual([1, 2, 3, 9].map(retryDelayMs), [5 * 60_000, 20 * 60_000, 60 * 60_000, 60 * 60_000]);
+  assert.deepEqual([1, 2, 3, 9].map((n) => retryDelayMs(n)), [5 * 60_000, 20 * 60_000, 60 * 60_000, 60 * 60_000]);
   assert.deepEqual(nextRetry(run), { number: 1, of: 3, at: new Date(finishedAt.getTime() + 5 * 60_000) });
   assert.deepEqual(nextRetry({ ...run, attempt: 2 }), { number: 2, of: 3, at: new Date(finishedAt.getTime() + 20 * 60_000) });
   assert.deepEqual(nextRetry({ ...run, attempt: 3 })?.number, 3);
@@ -63,6 +68,10 @@ test('a failure gets three retries at 5, 20 and 60 minutes, so at most four atte
   // No file changes earns one retry only.
   assert.deepEqual(nextRetry({ ...run, failureKind: 'retry_once' })?.of, 1);
   assert.equal(nextRetry({ ...run, failureKind: 'retry_once', attempt: 2 }), null);
+  // A GitHub block is re-checked six times over about three days.
+  assert.deepEqual(nextRetry({ ...run, failureKind: 'wait' }), { number: 1, of: 6, at: new Date(finishedAt.getTime() + 60 * 60_000) });
+  assert.deepEqual(nextRetry({ ...run, failureKind: 'wait', attempt: 6 })?.at, new Date(finishedAt.getTime() + 24 * 60 * 60_000));
+  assert.equal(nextRetry({ ...run, failureKind: 'wait', attempt: 7 }), null);
   for (const blocked of [{ failureKind: 'human' }, { failureKind: null }, { failureKind: 'unknown' }, { followUp: true },
     { status: 'cancelled' }, { status: 'succeeded' }, { finishedAt: null }])
     assert.equal(nextRetry({ ...run, ...blocked }), null, JSON.stringify(blocked));
@@ -74,7 +83,10 @@ test('a failure gets three retries at 5, 20 and 60 minutes, so at most four atte
 test('a retry continues the open PR branch and carries the end of the failure', () => {
   const run = { id: 'run_1', attempt: 1, mode: 'implement', branchName: 'factory/ticket-1-abc', pullRequestState: 'open', log: `${'a'.repeat(5000)}\nCI still failing.` };
   const retry = retryFrom(run);
-  assert.deepEqual({ ...retry, failure: undefined }, { parentRunId: 'run_1', attempt: 2, branchName: 'factory/ticket-1-abc', failure: undefined });
+  assert.deepEqual({ ...retry, failure: undefined }, { parentRunId: 'run_1', attempt: 2, branchName: 'factory/ticket-1-abc', failure: undefined, recheck: false });
+  // A GitHub block only re-checks the open PR; with no PR to continue, the agent works afresh.
+  assert.equal(retryFrom({ ...run, failureKind: 'wait' }).recheck, true);
+  assert.equal(retryFrom({ ...run, failureKind: 'wait', pullRequestState: 'closed' }).recheck, false);
   assert.ok(retry.failure.endsWith('CI still failing.') && retry.failure.length === FAILURE_TAIL + 1);
   assert.equal(failureTail('short\n'), 'short');
   // A branch without a PR is reused too: the runner starts it fresh when it was never pushed.
@@ -158,6 +170,14 @@ test('automation retries a due failure through claimRun, within budget, and a re
     }
     await db.update(schema.runs).set({ attempt: 3, failureKind: 'retry' }).where(eq(schema.runs.id, 'second'));
     assert.equal((await candidate())?.retryOf?.id, 'second');
+    // A GitHub block waits its own longer schedule: retry 3 is due after six hours, and it gets six re-checks.
+    await db.update(schema.runs).set({ failureKind: 'wait' }).where(eq(schema.runs.id, 'second'));
+    assert.equal(await candidate(), undefined);
+    await db.update(schema.runs).set({ attempt: 6, finishedAt: minutesAgo(1441) }).where(eq(schema.runs.id, 'second'));
+    assert.equal((await candidate())?.retryOf?.id, 'second');
+    await db.update(schema.runs).set({ attempt: 7 }).where(eq(schema.runs.id, 'second'));
+    assert.equal(await candidate(), undefined);
+    await db.update(schema.runs).set({ attempt: 3, failureKind: 'retry', finishedAt: minutesAgo(120) }).where(eq(schema.runs.id, 'second'));
     // A person's requeue starts a fresh attempt at 1.
     await db.update(schema.runs).set({ attempt: 4 }).where(eq(schema.runs.id, 'second'));
     await moveTicket(db, 'ticket', 'intake', true);

@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { agents, runs, tickets } from '@/db/schema';
 import { LABELS } from '@/lib/brand';
 import type { Db, TicketStage } from '@/lib/queries';
-import { FAILURE_KINDS, RETRY_BACKOFF_MINUTES, RETRY_BUDGET } from '@/lib/run-retry';
+import { FAILURE_KINDS, RETRY_BACKOFF_MINUTES, RETRY_BUDGET, WAIT_BACKOFF_MINUTES } from '@/lib/run-retry';
 
 /** Applying plans are not runnable until all dependency edges have been saved. */
 export const planReady = () => sql`(${tickets.planTask} is null or exists (
@@ -16,12 +16,14 @@ export const planReady = () => sql`(${tickets.planTask} is null or exists (
  */
 export function retryDue() {
   const budget = sql.join(FAILURE_KINDS.map((kind) => sql`when ${kind} then ${RETRY_BUDGET[kind]}`), sql` `);
-  const delay = sql.join(RETRY_BACKOFF_MINUTES.map((minutes, index) => sql`when ${index + 1} then ${minutes * 60}`), sql` `);
+  const delay = (schedule: readonly number[]) => sql`case ${runs.attempt} ${sql.join(schedule.map((minutes, index) =>
+    sql`when ${index + 1} then ${minutes * 60}`), sql` `)} else ${schedule.at(-1)! * 60} end`;
   return sql`(${runs.status} = 'failed'
     and (${tickets.requeuedAt} is null or ${runs.createdAt} >= ${tickets.requeuedAt})
     and not (${runs.parentRunId} is not null and ${runs.attempt} = 1)
     and ${runs.attempt} <= (case ${runs.failureKind} ${budget} else 0 end)
-    and ${runs.finishedAt} <= unixepoch() - (case ${runs.attempt} ${delay} else ${RETRY_BACKOFF_MINUTES.at(-1)! * 60} end))`;
+    and ${runs.finishedAt} <= unixepoch() - (case when ${runs.failureKind} = 'wait'
+      then (${delay(WAIT_BACKOFF_MINUTES)}) else (${delay(RETRY_BACKOFF_MINUTES)}) end))`;
 }
 
 /** One transaction creates the run and claims both resources, or changes neither. */

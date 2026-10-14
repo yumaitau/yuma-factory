@@ -6,8 +6,10 @@ const diff = (path, ...lines) => `diff --git a/${path} b/${path}\nindex 1..2 100
 
 test("dependency version bumps skip review; anything else is reviewed", () => {
   const bump = diff("package.json", '-    "next": "16.3.8",', '+    "next": "16.4.1",', '-    "@types/node": "^22.1.0"', '+    "@types/node": "^22.2.0"')
-    + diff("pnpm-lock.yaml", "-  next@16.3.8:", "+  next@16.4.1:", "+    resolution: {integrity: sha512-abc}")
-    + diff("apps/web/next-env.d.ts", '-import "./.next/dev/types/routes.d.ts";', '+import "./.next/types/routes.d.ts";')
+    + diff("pnpm-lock.yaml", "-  next@16.3.8:", "+  next@16.4.1:", "-    resolution: {integrity: sha512-old}", "+    resolution: {integrity: sha512-abc}",
+      "-  '@next/env@16.3.8':", "+  '@next/env@16.4.1':", "-  sharp@0.35.4:", "+  sharp@0.35.5:", "+  next@16.4.1(react@19.2.5):")
+    + diff("package-lock.json", '-    "node_modules/next": {', '+    "node_modules/next": {', '+      "resolved": "https://registry.npmjs.org/next/-/next-16.4.1.tgz",')
+    + diff("go.sum", "-golang.org/x/net v0.59.0 h1:a=", "+golang.org/x/net v0.60.0 h1:b=")
     + diff("pnpm-workspace.yaml", "-  sharp: 0.35.4", "+  sharp: 0.35.5")
     + diff("go.mod", "-require golang.org/x/net v0.59.0", "+require golang.org/x/net v0.60.0", "-\tgolang.org/x/text v0.1.0 // indirect", "+\tgolang.org/x/text v0.2.0 // indirect")
     + diff("requirements.txt", "-pyjwt==2.13.0", "+pyjwt==2.14.0");
@@ -27,7 +29,17 @@ test("dependency version bumps skip review; anything else is reviewed", () => {
     binary: "diff --git a/package.json b/package.json\nindex 1..2 100644\nBinary files a/package.json and b/package.json differ\n",
     symlink: "diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\nindex 1..2 120000\n--- a/pnpm-lock.yaml\n+++ b/pnpm-lock.yaml\n@@ -1 +1 @@\n-a\n+/etc/passwd\n",
     newFile: "diff --git a/package.json b/package.json\nnew file mode 100644\n--- /dev/null\n+++ b/package.json\n@@ -0,0 +1 @@\n+{}\n",
-    lockfileOnly: diff("pnpm-lock.yaml", "-    resolution: {integrity: sha512-a}", "+    resolution: {tarball: https://evil.example/x.tgz}"),
+    lockfileOnly: diff("pnpm-lock.yaml", "-    resolution: {integrity: sha512-a}", "+    resolution: {integrity: sha512-b}"),
+    tarball: diff("package.json", '-    "next": "16.3.8",', '+    "next": "16.4.1",')
+      + diff("pnpm-lock.yaml", "-    resolution: {integrity: sha512-a}", "+    resolution: {tarball: https://evil.example/x.tgz}"),
+    newPackage: diff("package.json", '-    "next": "16.3.8",', '+    "next": "16.4.1",')
+      + diff("pnpm-lock.yaml", "-  next@16.3.8:", "+  next@16.4.1:", "+  evil@1.0.0:", "+    requiresBuild: true"),
+    newGoModule: diff("go.mod", "-require golang.org/x/net v0.59.0", "+require golang.org/x/net v0.60.0")
+      + diff("go.sum", "+evil.example/x v1.0.0 h1:c="),
+    otherRegistry: diff("package.json", '-    "next": "16.3.8",', '+    "next": "16.4.1",')
+      + diff("package-lock.json", '+      "resolved": "https://evil.example/next-16.4.1.tgz",'),
+    nextEnv: diff("next-env.d.ts", '-import "./.next/dev/types/routes.d.ts";', '+import "./evil";'),
+    unreadLockfile: diff("Cargo.toml", '-serde = "1.0.1"', '+serde = "1.0.2"') + diff("Cargo.lock", '-version = "1.0.1"', '+version = "1.0.2"'),
   })) assert.equal(isDependencyBump(patch), false, name);
 });
 

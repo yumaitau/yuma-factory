@@ -341,11 +341,19 @@ test("repairs that change nothing stop the run; a pushed repair resets the count
   assert.equal(repairs, 3 + MAX_IDLE_REPAIRS);
 });
 
-test("GitHub billing, budget and quota blocks are recognised as unfixable CI failures", () => {
-  assert.match(githubBlockReason(JSON.stringify([{ message: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings" }])), /billing/);
-  assert.match(githubBlockReason("The job was not started because an Actions budget is preventing further use."), /budget/);
-  assert.match(githubBlockReason("Error: Failed to CreateArtifact: Artifact storage quota has been hit. Unable to upload any new artifacts."), /artifact storage/);
-  assert.match(githubBlockReason("The job was not started because the runner group is disabled."), /did not start/);
-  assert.equal(githubBlockReason("test: failure\nexpected 1 to equal 2"), null);
-  assert.equal(githubBlockReason(undefined), null);
+test("GitHub billing, budget and quota blocks are recognised only when the job's steps agree", () => {
+  const notStarted = "The job was not started because recent account payments have failed or your spending limit needs to be increased.";
+  assert.match(githubBlockReason(notStarted, []), /billing/);
+  assert.match(githubBlockReason("The job was not started because an Actions budget is preventing further use.", []), /budget/);
+  assert.match(githubBlockReason("The job was not started because the runner group is disabled.", []), /did not start/);
+  // A job that ran steps was started: the text came from its own output.
+  assert.equal(githubBlockReason(notStarted, [{ name: "Run tests", conclusion: "failure" }]), null);
+  // Non-Actions checks have no steps to confirm anything.
+  assert.equal(githubBlockReason(notStarted, undefined), null);
+  const quota = "Failed to CreateArtifact: Artifact storage quota has been hit.";
+  const steps = (...failed) => [{ name: "Checkout", conclusion: "success" }, ...failed.map((name) => ({ name, conclusion: "failure" }))];
+  assert.match(githubBlockReason(quota, steps("Run actions/upload-artifact@v4")), /artifact storage/);
+  // Tests failed too: that is the code's failure to repair.
+  assert.equal(githubBlockReason(quota, steps("Run tests", "Run actions/upload-artifact@v4")), null);
+  assert.equal(githubBlockReason("test: failure\nexpected 1 to equal 2", steps("Run tests")), null);
 });

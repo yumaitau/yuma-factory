@@ -6,8 +6,24 @@ const SEVERITIES = ["high", "medium", "low"];
 /** high and medium findings must be fixed before a push; low ones are reported only. */
 export const isBlocking = (finding) => finding.severity !== "low";
 
-// Lockfiles and generated files change wholesale with a version bump.
-const GENERATED = /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|bun\.lockb?|deno\.lock|go\.sum|Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|Gemfile\.lock|composer\.lock|gradle\.lockfile|packages\.lock\.json|next-env\.d\.ts)$/;
+// Lockfiles Factory can read: their changes may only move packages that already existed or were bumped.
+const LOCKFILE = /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|go\.sum)$/;
+// Each lockfile line that names a package; group 1 is the name.
+const LOCK_ENTRY = [
+  /^\s*'?((?:@[^@\s'/]+\/)?[^@\s'(/]+)@[^\s:]*(?:\([^\s]*\))*'?:\s*$/, // pnpm: next@16.4.1(...):
+  /^\s*"(?:[^"]*\/)?node_modules\/((?:@[^"/]+\/)?[^"/]+)":/, // npm: "node_modules/a/node_modules/b": {
+  /^"?((?:@[^@\s"/]+\/)?[^@\s",]+)@[^:]*:\s*$/, // yarn: "name@^1", name@^1.1:
+  /^(\S+) v\S+ h1:/, // go.sum
+];
+// A changed lockfile line may not point outside the package registry or add an install script.
+const LOCK_UNSAFE = /tarball:|git\+|git:\/\/|github:|file:|link:|requiresBuild|hasInstallScript|https?:\/\/(?!registry\.npmjs\.org\/|registry\.yarnpkg\.com\/)/i;
+const lockEntry = (content) => {
+  for (const pattern of LOCK_ENTRY) {
+    const match = pattern.exec(content);
+    if (match) return match[1];
+  }
+  return null;
+};
 // In a manifest, only version pins may change.
 const MANIFEST = /(^|\/)(package\.json|pnpm-workspace\.yaml|go\.mod|pyproject\.toml|requirements[\w.-]*\.txt|Pipfile|Gemfile|composer\.json|deno\.jsonc?)$/;
 // One version or a comma/space separated range of them: 16.4.1, ^1.2, >=1.2,<2, v0.60.0. Never a path or alias.
@@ -47,7 +63,7 @@ export function isDependencyBump(patch) {
       // Quoted or spaced paths are unusual for manifests; review them.
       if (!match || match[1] !== match[2]) return false;
       file = { path: match[2], hunk: false, removed: [], added: [] };
-      if (!GENERATED.test(file.path) && !MANIFEST.test(file.path)) return false;
+      if (!LOCKFILE.test(file.path) && !MANIFEST.test(file.path)) return false;
       files.push(file);
       continue;
     }
@@ -57,7 +73,13 @@ export function isDependencyBump(patch) {
       if (line.startsWith("@@")) file.hunk = true;
       continue;
     }
-    if (line.startsWith("@@") || !/^[+-]/.test(line) || GENERATED.test(file.path)) continue;
+    if (line.startsWith("@@") || !/^[+-]/.test(line)) continue;
+    if (LOCKFILE.test(file.path)) {
+      if (line[0] === "+" && LOCK_UNSAFE.test(line)) return false;
+      const name = lockEntry(line.slice(1));
+      if (name) (line[0] === "-" ? file.removed : file.added).push(name);
+      continue;
+    }
     const content = line.slice(1).trim();
     if (!content) continue;
     const key = versionPin(content);
@@ -65,9 +87,16 @@ export function isDependencyBump(patch) {
     (line[0] === "-" ? file.removed : file.added).push(key);
   }
   if (!files.length || files.some((f) => !f.hunk)) return false;
-  const manifests = files.filter((f) => !GENERATED.test(f.path));
+  const manifests = files.filter((f) => !LOCKFILE.test(f.path));
   const same = (a, b) => a.length === b.length && [...a].sort().every((key, i) => key === [...b].sort()[i]);
-  return manifests.some((f) => f.added.length) && manifests.every((f) => same(f.removed, f.added));
+  if (!manifests.some((f) => f.added.length) || !manifests.every((f) => same(f.removed, f.added))) return false;
+  // A lockfile may move existing or bumped packages to new versions, never bring in a new one.
+  const known = new Set(manifests.flatMap((f) => f.added));
+  for (const lock of files.filter((f) => LOCKFILE.test(f.path))) {
+    for (const name of lock.removed) known.add(name);
+    if (lock.added.some((name) => !known.has(name))) return false;
+  }
+  return true;
 }
 
 /** Validates the reviewer's untrusted review.json. null when it gave no usable verdict. */

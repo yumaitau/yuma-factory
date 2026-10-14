@@ -196,7 +196,8 @@ export async function completeCodexRun(runId: string, result: RunResult) {
   // An adversarially confirmed "already done" closes the ticket like green CI, with no PR to merge.
   const ciComplete = run.mode !== 'plan' && (hasGreenCICompletion(result) || (result.status === 'succeeded' && result.alreadyDone === true));
   if (ciComplete) {
-    await db.update(runs).set({ log: `CI green; updating GitHub issue, merging low-risk PRs, and applying ${LABELS.done}.`,
+    await db.update(runs).set({ log: result.alreadyDone ? `Work already done; applying ${LABELS.done}.`
+      : `CI green; updating GitHub issue, merging low-risk PRs, and applying ${LABELS.done}.`,
       pullRequestUrl: result.pullRequestUrl ?? null }).where(and(eq(runs.id, runId), eq(runs.status, 'running')));
     try {
       const context = await getTicketWithContext(run.ticketId);

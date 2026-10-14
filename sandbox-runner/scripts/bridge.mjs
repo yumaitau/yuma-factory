@@ -636,6 +636,15 @@ async function run() {
       ...(claudeMcp ? ["--mcp-config", claudeMcp] : []),
       ...(req.model ? ["--model", req.model] : []),
     ]);
+    // A process the agent left running could change the checkout or forge a verdict after its session.
+    // kill(-1) as the agent's uid signals all of them at once, so a forking process cannot slip a child past it.
+    const stopAgentProcesses = async () => {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await command("kill", ["-KILL", "-1"], { uid: 10001, gid: 10001 }).catch(() => {});
+        if (!(await command("pgrep", ["-u", "10001"]).then(() => true, () => false))) return;
+      }
+      throw new Error("Agent processes would not stop. Ticket left open.");
+    };
     const execute = async (prompt, { notes = true } = {}) => {
       let claudeSummary = "";
       let claudeFailure;
@@ -686,8 +695,7 @@ async function run() {
       } finally {
         clearInterval(timer);
         events.end();
-        // A process the agent left running could change the checkout or its notes after this point.
-        await command("pkill", ["-KILL", "-u", "10001"]).catch(() => {});
+        await stopAgentProcesses();
         await flushProgress();
       }
       await rememberTokens();
@@ -747,15 +755,13 @@ async function run() {
       // The last review's outcome, for the PR description.
       let reviewNote = "";
       // Unresolved findings make the ticket no longer low risk, so neither Factory nor the app merges it unread.
-      const holdForReview = async (concerns) => {
+      // Runs before the push: if it fails, nothing unreviewed reaches a branch that could merge automatically.
+      const dropLowRisk = async () => {
         const issue = await github(`/issues/${req.issueNumber}`);
         for (const name of labelNames(issue.labels).filter((label) => isLowRisk([label], req.labelPrefix)))
           await github(`/issues/${req.issueNumber}/labels/${encodeURIComponent(name)}`, "DELETE").catch((error) => {
             if (error.status !== 404) throw error;
           });
-        await github(`/issues/${req.issueNumber}/comments`, "POST", {
-          body: `${concerns}\n\nFactory pushed these changes for human review and removed any low-risk label, so they will not merge automatically.`,
-        });
       };
       /** Reviews the checkout and returns the exact tree to publish, plus concerns a person must see. */
       const reviewChanges = async (start) => {
@@ -816,6 +822,7 @@ async function run() {
           return false;
         }
         await assertNoCiConfig(reviewed);
+        if (concerns) await dropLowRisk();
         const patch = { stdout: await treeDiff(baseTree, reviewed, ["--binary", "--full-index"]) };
         const publish = `${root}/publish`;
         const credentialEnv = {
@@ -891,7 +898,10 @@ async function run() {
         );
         publishedHead = commit.stdout.trim();
         reviewedTree = reviewed;
-        if (concerns) await holdForReview(concerns);
+        // The label is already gone; a failed comment must not fail a run that pushed.
+        if (concerns) await github(`/issues/${req.issueNumber}/comments`, "POST", {
+          body: `${concerns}\n\nFactory pushed these changes for human review and removed any low-risk label, so they will not merge automatically.`,
+        }).catch(() => progress("Could not post the review findings on the issue."));
         return true;
       };
       const closeGitHubIssue = async () => {
@@ -905,7 +915,9 @@ async function run() {
         for (const check of failedChecks) {
           const annotations = JSON.stringify(await pages(`/check-runs/${check.id}/annotations`));
           diagnostics.push(check.output?.summary ?? "", check.output?.text ?? "", annotations);
-          blocks.push(githubBlockReason(`${check.output?.summary ?? ""}\n${check.output?.text ?? ""}\n${annotations}`));
+          // A check run of GitHub Actions shares its id with the job, whose steps confirm a block.
+          const job = check.app?.slug === "github-actions" ? await github(`/actions/jobs/${check.id}`).catch(() => null) : null;
+          blocks.push(githubBlockReason(`${check.output?.summary ?? ""}\n${check.output?.text ?? ""}\n${annotations}`, job?.steps));
         }
         // Only when every failure is a block; a real failure alongside one still gets repaired.
         const known = new Set([...failedChecks.map((check) => check.name), ...current.workflows.map((run) => run.name)]);
@@ -1087,7 +1099,7 @@ async function run() {
         const credentialEnv = await gitCredentials();
         // The old checkout's .git config and hooks are agent-written. Stop agent
         // processes, discard it, and fetch the merge commit into a fresh root-owned repo.
-        await command("pkill", ["-KILL", "-u", "10001"]).catch(() => {});
+        await stopAgentProcesses();
         await fs.rm(work, { recursive: true, force: true });
         await command("git", ["init", "-q", work]);
         await command("git", ["-C", work, "fetch", "--depth", "1", `https://github.com/${req.repoFullName}.git`, mergeSha], { env: credentialEnv });

@@ -6,6 +6,7 @@ import readline from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
 import { agentPlan, claudeActivities, claudeLimits, claudeOutput, codexActivity, executionOutput, jsonLines, redactOutput } from "./output.mjs";
 import { startProxy } from "./workers-ai.mjs";
+import { CHECK_TIMEOUT_MS, MAX_CHECK_FIXES, checkFixPrompt, checkNames, checkPlan, failureOutput, newFailures, withRemovedChecks } from "./checks.mjs";
 import { MAX_REVIEW_FIXES, alreadyDonePrompt, fixPrompt, formatFindings, isBlockedOnIssues, isBlocking, isDependencyBump, parseFindings, reviewPrompt, reviewUntilClean } from "./review.mjs";
 
 const root = "/factory";
@@ -314,7 +315,7 @@ function command(bin, args, options = {}) {
     child.stdout.setEncoding("utf8");
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`${bin} exceeded its time limit.`));
+      reject(Object.assign(new Error(`${bin} exceeded its time limit.`), { stdout, stderr }));
     }, options.timeout ?? 120000);
     child.stdout.on("data", (data) => {
       options.onStdout?.(data);
@@ -740,11 +741,11 @@ async function run() {
         await agentGit(["add", "-A"]);
         return (await agentGit(["write-tree"])).stdout.trim();
       };
-      // A reviewer must not change what is pushed: put the checkout back exactly as it was.
-      const restoreTree = async (tree) => {
+      // A reviewer or a check must not change what is pushed: put the checkout back exactly as it was.
+      const restoreTree = async (tree, note = "The reviewer edited files; its edits were discarded.") => {
         if ((await workTree()) === tree) return;
         await agentGit(["read-tree", "-u", "--reset", tree]);
-        await progress("The reviewer edited files; its edits were discarded.");
+        await progress(note);
         if ((await workTree()) !== tree) throw new Error("The checkout changed after review. Ticket left open.");
       };
       // Tree-to-tree diffs run no clean filters; --text defeats `-diff` attributes hiding content from the reviewer.
@@ -820,6 +821,120 @@ async function run() {
         if ((await workTree()) !== lastReviewed) await agentGit(["read-tree", "-u", "--reset", lastReviewed]);
         return { tree: lastReviewed, concerns };
       };
+      // Repository scripts run as the agent's user without credentials, like the agent itself.
+      const checkOptions = (cwd) => ({
+        env: { ...env, HOME: "/home/factory", CI: "1", NEXT_TELEMETRY_DISABLED: "1" }, uid: 10001, gid: 10001, cwd, timeout: CHECK_TIMEOUT_MS,
+      });
+      /**
+       * Installs and runs the repository's own checks in `dir`; null when it has none Factory can run.
+       * Each command reports progress, so a long install or build is not mistaken for a stalled run.
+       */
+      const runChecks = async (dir, { label = "" } = {}) => {
+        const files = new Set(await fs.readdir(dir).catch(() => []));
+        let packageJson = null;
+        if (files.has("package.json")) {
+          const handle = await fs.open(`${dir}/package.json`, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW).catch(() => null);
+          packageJson = await handle?.readFile("utf8").catch(() => null) ?? null;
+          await handle?.close();
+        }
+        const plan = checkPlan(packageJson, files);
+        if (!plan) return null;
+        await progress(`${label}Installing dependencies with ${plan.bin}.`);
+        try {
+          await command(plan.bin, plan.install, checkOptions(dir));
+        } catch (error) {
+          return [{ name: "install", ok: false, output: redact(failureOutput(error)) }];
+        } finally {
+          await stopAgentProcesses();
+        }
+        const results = [];
+        for (const check of plan.checks) {
+          await progress(`${label}Running ${check.name} (${plan.bin} run ${check.script}).`);
+          try {
+            await command(plan.bin, ["run", check.script], checkOptions(dir));
+            results.push({ name: check.name, ok: true });
+          } catch (error) {
+            results.push({ name: check.name, ok: false, output: redact(failureOutput(error)) });
+          } finally {
+            // A server or watcher a check started could change the checkout later.
+            await stopAgentProcesses();
+          }
+        }
+        return results;
+      };
+      // The same checks on the base commit, run once per base and only when something fails. Root fetches the
+      // base into a fresh repository, as it clones the checkout, so the agent's Git config and attributes can't
+      // shape it. With every agent process stopped, root removes it, as it removes the checkout in repairMain.
+      let baseChecks;
+      const UNCOMPARABLE = [{ name: "install", ok: false }];
+      const baseResults = async () => {
+        if (baseChecks?.head === baseHead) return baseChecks.results;
+        // Only root can add entries to the review directory, so this path is always one root made.
+        const dir = `${reviewDir}/base`;
+        const clear = async () => {
+          await stopAgentProcesses();
+          await fs.rm(dir, { recursive: true, force: true });
+        };
+        // A failed comparison leaves every failure to CI; agent processes that won't stop still fail the run.
+        const stuck = (error) => /Agent processes would not stop/.test(error?.message ?? "");
+        let results;
+        try {
+          await clear();
+          const credentialEnv = { ...gitEnv, GIT_ASKPASS: `${root}/askpass`, FACTORY_GIT_TOKEN: await githubToken() };
+          await command("git", ["init", "-q", dir]);
+          await command("git", ["-C", dir, "fetch", "-q", "--depth", "1", `https://github.com/${req.repoFullName}.git`, baseHead], { env: credentialEnv });
+          await command("git", ["-C", dir, "-c", "core.hooksPath=/dev/null", "checkout", "-q", "--force", "--detach", "FETCH_HEAD"]);
+          // No agent process may change the base before its checks run.
+          await stopAgentProcesses();
+          await command("chown", ["-R", "-h", "10001:10001", dir]);
+          // A base without checks Factory can run can't be compared: a change that adds a lockfile isn't blamed for old errors.
+          results = await runChecks(dir, { label: "Base commit: " }) ?? UNCOMPARABLE;
+        } catch (error) {
+          if (stuck(error)) throw error;
+          results = UNCOMPARABLE;
+        }
+        await clear().catch((error) => {
+          if (stuck(error)) throw error;
+        });
+        baseChecks = { head: baseHead, results };
+        return results;
+      };
+      /**
+       * Runs the checks and fixes failures this change introduced. Returns the tree the last checks ran on and
+       * the failures left on it, or null when the repository has no checks Factory can run. CI still runs them all.
+       * Each fix pass re-runs every check, so a flaky check that passes the next time stops counting.
+       */
+      const checkLocally = async ({ fixes = MAX_CHECK_FIXES } = {}) => {
+        // The checks that ran once the install worked. A fix pass that removes one, or the lockfile, has not fixed it.
+        let expected;
+        for (let pass = 0; ; pass++) {
+          const tree = await workTree();
+          await progress(pass ? "Running the repository's checks again." : "Running the repository's lint, type check, tests and build before push.");
+          let results = await runChecks(work);
+          await restoreTree(tree, "The checks changed files in the checkout; those changes were discarded.");
+          if (!results && !pass) {
+            await progress("No lint, type check, test or build scripts Factory can run locally. CI checks this change.");
+            return null;
+          }
+          ({ results, expected } = withRemovedChecks(results, expected));
+          const failed = results.filter((result) => !result.ok);
+          if (!failed.length) {
+            await progress(`Local checks passed: ${checkNames(results)}.`);
+            return { tree, failures: [] };
+          }
+          const introduced = newFailures(failed, await baseResults());
+          if (!introduced.length) {
+            await progress(`Local checks ${checkNames(failed)} also fail before this change or can't be compared here, so CI decides them.`);
+            return { tree, failures: [] };
+          }
+          if (pass === fixes) {
+            await progress(`Local checks still fail after ${fixes} fix passes: ${checkNames(introduced)}.`);
+            return { tree, failures: introduced };
+          }
+          await progress(`Local checks failed: ${checkNames(introduced)}. Fixing before push.`);
+          await execute(checkFixPrompt(req.prompt, introduced), { notes: false });
+        }
+      };
       // Returns false when the checkout has nothing new to publish.
       const publishChanges = async (repair = false, message = `fix: address issue #${req.issueNumber}`) => {
         const baseTree = (await agentGit(["rev-parse", `${baseHead}^{tree}`])).stdout.trim();
@@ -832,7 +947,19 @@ async function run() {
         // A recovered branch is its own base, so an idle repair has an empty patch.
         if (written === baseTree) return false;
         await assertNoCiConfig(written);
-        const { tree: reviewed, concerns } = await reviewChanges(written);
+        let checked = await checkLocally();
+        let { tree: reviewed, concerns } = await reviewChanges(checked?.tree ?? written);
+        // Review fixes change code the checks passed: check once more, and review any fixes that makes.
+        if (checked && reviewed !== checked.tree) {
+          checked = await checkLocally();
+          if (checked && checked.tree !== reviewed) {
+            ({ tree: reviewed, concerns } = await reviewChanges(checked.tree));
+            // The failures reported are always the pushed tree's: check what that review left, without fixing it.
+            if (reviewed !== checked.tree) checked = await checkLocally({ fixes: 0 });
+          }
+        }
+        if (checked?.failures.length) concerns = [concerns, `These checks fail locally with this change but passed before it: ${checkNames(checked.failures)}.`]
+          .filter(Boolean).join("\n\n");
         if (reviewed === baseTree) {
           if (!repair) throw Object.assign(new Error("Review fixes removed every change, so nothing was published. Ticket left open."), { retryable: false });
           return false;

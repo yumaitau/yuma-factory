@@ -125,6 +125,22 @@ export async function mergeReview(db: Db, client: Client, context: ReviewContext
   return mergeOnce(db, client, context, pull.headSha, { actor: 'user', userId, acceptanceId: acceptance.id }, options);
 }
 
+// Next and OpenNext upgrades have taken Cloudflare apps down with CI green, so a person merges them.
+const RUNTIME_VERSION_LINE = /^[+-].*"(?:next|@opennextjs\/[^"]+)"\s*:/m;
+
+/** package.json files in the pull request that change the Next or OpenNext version. A file GitHub sends without a patch counts. */
+export async function runtimeUpgradeFiles(client: Client, context: ReviewContext): Promise<string[]> {
+  const found: string[] = [];
+  for (let page = 1; ; page++) {
+    const { data } = await client.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/files', {
+      owner: context.owner, repo: context.repo, pull_number: context.pullNumber, per_page: 100, page, request: { signal: AbortSignal.timeout(15_000) },
+    });
+    for (const file of data)
+      if (/(^|\/)package\.json$/.test(file.filename) && (!file.patch || RUNTIME_VERSION_LINE.test(file.patch))) found.push(file.filename);
+    if (data.length < 100) return found;
+  }
+}
+
 /**
  * Factory's low-risk policy merges the CI-confirmed SHA through the same serialised path. The issue's
  * labels are read live; a head that moved off `sha` is refused. Recorded as Factory, never as an acceptance.
@@ -135,6 +151,8 @@ export async function factoryMerge(db: Db, client: Client, context: ReviewContex
   });
   const labels = issue.labels.map((label) => typeof label === 'string' ? label : label.name ?? '');
   if (!isLowRisk(labels, LABEL_PREFIX)) throw new Error('Only low-risk tickets merge automatically. PR left open for review.');
+  const upgrades = await runtimeUpgradeFiles(client, context);
+  if (upgrades.length) throw new Error(`${upgrades.join(', ')} changes the Next or OpenNext version, so a person must merge it. PR left open for review.`);
   return mergeOnce(db, client, context, sha, { actor: 'factory' }, options);
 }
 

@@ -12,7 +12,7 @@ const URL = 'https://github.com/org/repo/pull/10';
 const fast = { wait: () => new Promise((resolve) => setTimeout(resolve, 2)) };
 
 /** A GitHub pull request whose head, labels and merge latency the test controls. */
-function github(options: { labels?: string[]; mergeable?: string; delay?: number } = {}) {
+function github(options: { labels?: string[]; mergeable?: string; delay?: number; files?: { filename: string; patch?: string }[] } = {}) {
   const pr = { head: A, merged: false, mergeSha: null as string | null };
   const calls: string[] = [];
   const client = { request: async (route: string, params: { sha?: string }) => {
@@ -23,6 +23,7 @@ function github(options: { labels?: string[]; mergeable?: string; delay?: number
       Object.assign(pr, { merged: true, mergeSha: MERGED });
       return { data: { merged: true, sha: MERGED } };
     }
+    if (route.endsWith('/files')) return { data: options.files ?? [] };
     if (route.includes('/pulls/{pull_number}')) return { data: { state: pr.merged ? 'closed' : 'open', merged: pr.merged, draft: false,
       head: { sha: pr.head }, mergeable_state: options.mergeable ?? 'clean', merge_commit_sha: pr.mergeSha } };
     if (route.includes('/issues/{issue_number}')) return { data: { labels: (options.labels ?? []).map((name) => ({ name })) } };
@@ -87,6 +88,24 @@ test('the low-risk path refuses a drifted head too, and records the refusal as F
     assert.deepEqual({ ...sqlite.prepare('SELECT actor, user_id AS userId, head_sha AS sha FROM merge_events').get() }, { actor: 'factory', userId: null, sha: A });
     // Not low risk: Factory never merges on its own.
     await assert.rejects(factoryMerge(db, github().client, await context(), B, fast), /Only low-risk tickets/);
+  } finally { sqlite.close(); }
+});
+
+test('the low-risk path leaves a Next or OpenNext version change for a person', async () => {
+  const { db, sqlite, count, context } = database(['factory:risk:low']);
+  try {
+    const bump = { filename: 'apps/web/package.json', patch: '@@ -2,3 +2,3 @@\n-    "next": "16.3.8",\n+    "next": "16.4.1",' };
+    const gh = github({ labels: ['factory:risk:low'], files: [{ filename: 'README.md', patch: '+next' }, bump] });
+    await assert.rejects(factoryMerge(db, gh.client, await context(), A, fast), /apps\/web\/package\.json changes the Next or OpenNext version/);
+    const compact = { filename: 'package.json', patch: '-{"dependencies":{"next":"16.3.8"}}\n+{"dependencies":{"next":"16.4.1"}}' };
+    await assert.rejects(factoryMerge(db, github({ labels: ['factory:risk:low'], files: [compact] }).client, await context(), A, fast), /changes the Next/);
+    // A package.json too large for GitHub to send a patch is treated as one.
+    await assert.rejects(factoryMerge(db, github({ labels: ['factory:risk:low'], files: [{ filename: 'package.json' }] }).client, await context(), A, fast), /changes the Next/);
+    assert.equal(gh.merges(), 0);
+    assert.equal(count('merge_events'), 0);
+    // Other dependency changes still merge.
+    const other = github({ labels: ['factory:risk:low'], files: [{ filename: 'package.json', patch: '-    "zod": "4.1.0",\n+    "zod": "4.1.1",\n     "next-auth": "5.0.0"' }] });
+    assert.equal((await factoryMerge(db, other.client, await context(), A, fast)).event.status, 'merged');
   } finally { sqlite.close(); }
 });
 

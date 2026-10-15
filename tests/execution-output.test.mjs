@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { claudeLimits, claudeOutput, executionOutput, jsonLines, redactOutput } from '../sandbox-runner/scripts/output.mjs';
+import { claudeLimits, claudeOutput, executionOutput, jsonLines, liveProcesses, redactOutput } from '../sandbox-runner/scripts/output.mjs';
 
 test('commands stream at start, output and file changes at completion', () => {
   assert.equal(executionOutput({ type: 'item.started', item: { type: 'command_execution', command: 'pnpm test' } }), '$ pnpm test');
@@ -48,4 +48,11 @@ test('Claude rate limit events map to usage windows', () => {
   });
   assert.equal(claudeLimits({ status: 'rejected', rateLimitType: 'seven_day', resetsAt: 300 }).secondary.usedPercent, 100);
   assert.equal(claudeLimits({}), null);
+});
+
+test('zombie agent processes waiting to be reaped do not count as running', () => {
+  assert.equal(liveProcesses(''), 0);
+  assert.equal(liveProcesses('Z\nZ+\n Zs\n'), 0);
+  assert.equal(liveProcesses('Z\nS\nR+\nD\nT\n'), 4);
+  assert.equal(liveProcesses('  Sl\n'), 1);
 });

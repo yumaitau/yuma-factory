@@ -4,7 +4,7 @@ import { evaluateCI, finishCommitCI, githubBlockReason, isCiConfigPath, finishWi
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
-import { agentPlan, claudeActivities, claudeLimits, claudeOutput, codexActivity, executionOutput, jsonLines, redactOutput } from "./output.mjs";
+import { agentPlan, claudeActivities, claudeLimits, claudeOutput, codexActivity, executionOutput, jsonLines, liveProcesses, redactOutput } from "./output.mjs";
 import { startProxy } from "./workers-ai.mjs";
 import { CHECK_TIMEOUT_MS, MAX_CHECK_FIXES, checkFixPrompt, checkNames, checkPlan, failureOutput, newFailures, withRemovedChecks } from "./checks.mjs";
 import { MAX_REVIEW_FIXES, alreadyDonePrompt, fixPrompt, formatFindings, isBlockedOnIssues, isBlocking, isDependencyBump, parseFindings, reviewPrompt, reviewUntilClean } from "./review.mjs";
@@ -639,10 +639,14 @@ async function run() {
     ]);
     // A process the agent left running could change the checkout or forge a verdict after its session.
     // kill(-1) as the agent's uid signals all of them at once, so a forking process cannot slip a child past it.
+    // A killed process stays a zombie until its parent reaps it, and this container's PID 1 may never reap
+    // orphans. Zombies run no code, so only processes in any other state count.
     const stopAgentProcesses = async () => {
       for (let attempt = 0; attempt < 10; attempt++) {
         await command("kill", ["-KILL", "-1"], { uid: 10001, gid: 10001 }).catch(() => {});
-        if (!(await command("pgrep", ["-u", "10001"]).then(() => true, () => false))) return;
+        const { stdout } = await command("ps", ["-o", "stat=", "-u", "10001"]).catch(() => ({ stdout: "" }));
+        if (!liveProcesses(stdout)) return;
+        await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
       }
       throw new Error("Agent processes would not stop. Ticket left open.");
     };

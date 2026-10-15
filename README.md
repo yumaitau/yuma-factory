@@ -69,13 +69,19 @@ After 07:00 Sydney time, the cron sends one daily email summarising unfinished t
 
 ## HTTP API and MCP
 
-Factory exposes the same operations over HTTP and MCP. Authenticate with `Authorization: Bearer <FACTORY_API_KEY>` or a signed-in session.
+Factory exposes the same operations over HTTP and MCP, so other agents can run it: start, stop and prompt runs, read run logs and sessions, move and retry tasks, set risk and assignment, sync repositories and issues, accept and merge reviews, and control the worker pool and subscriptions.
 
 - Catalog: `GET /api/v1`
 - OpenAPI: `GET /api/v1/openapi.json`
 - MCP (Streamable HTTP): `/api/mcp`
 
-MCP tools are named `factory_*` and map one-to-one to the `/api/v1` routes. Execution logs stay on the session-only live-output route.
+Authenticate with `Authorization: Bearer <key>`. Create a personal key on **API keys**; it acts as you, and the page shows a ready MCP client configuration:
+
+```json
+{ "mcpServers": { "factory": { "type": "http", "url": "https://<factory>/api/mcp", "headers": { "Authorization": "Bearer fk_…" } } } }
+```
+
+Keys are shown once, stored as SHA-256 digests, expire after 90 days, stop working when their owner may no longer sign in, and can be revoked at any time. They are created only in the app, never over the API. Calls that change anything need a bearer key; a browser session can only read, and cross-origin browser requests are refused. The shared `FACTORY_API_KEY` still works for read-only operations, memory, plans and the digest; operations marked `person` in the catalog need a personal key or a session. MCP tools are named `factory_*` and map one-to-one to the `/api/v1` routes.
 
 ## Architecture
 

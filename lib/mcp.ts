@@ -1,10 +1,9 @@
 import 'server-only';
 
 import { FACTORY_OPERATIONS, factoryCapabilities } from '@/lib/factory-catalog';
-import { bearerToken, secretMatches } from '@/lib/factory-auth';
 import { FactoryApiError, runFactoryOperation } from '@/lib/factory-operations';
-import { factoryApiKey } from '@/lib/env';
-import { requireApiSession } from '@/lib/session';
+import { crossOrigin, type FactoryActor } from '@/lib/factory-auth';
+import { requireFactoryAccess } from '@/lib/factory-http';
 
 const PROTOCOL = '2025-03-26';
 
@@ -22,12 +21,6 @@ function noStore(data: unknown, status = 200) {
   return Response.json(data, { status, headers: { 'Cache-Control': 'private, no-store' } });
 }
 
-async function requireMcpAccess(request: Request) {
-  if (secretMatches(bearerToken(request), factoryApiKey())) return { ok: true as const };
-  const session = await requireApiSession();
-  if (!session.ok) return session;
-  return { ok: true as const };
-}
 
 function toolsList() {
   return {
@@ -40,20 +33,13 @@ function toolsList() {
 }
 
 export async function handleFactoryMcp(request: Request) {
-  const origin = request.headers.get('origin');
-  if (origin) {
-    try {
-      if (new URL(origin).origin !== new URL(request.url).origin) {
-        return noStore({ error: { code: 'forbidden', message: 'Cross-origin MCP requests are not allowed.' } }, 403);
-      }
-    } catch {
-      return noStore({ error: { code: 'forbidden', message: 'Cross-origin MCP requests are not allowed.' } }, 403);
-    }
-  }
+  if (crossOrigin(request))
+    return noStore({ error: { code: 'forbidden', message: 'Cross-origin MCP requests are not allowed.' } }, 403);
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: { Allow: 'GET, POST, OPTIONS', 'Cache-Control': 'private, no-store' } });
   }
-  const access = await requireMcpAccess(request);
+  // Tool calls can change things, so MCP POSTs need a bearer key, never a session cookie alone.
+  const access = await requireFactoryAccess(request, true, request.method === 'POST');
   if (!access.ok) return access.response;
   if (request.method === 'GET') {
     return noStore({ ...factoryCapabilities(), protocolVersion: PROTOCOL, transport: 'streamable-http' });
@@ -71,18 +57,18 @@ export async function handleFactoryMcp(request: Request) {
     }
     if (message.id === undefined && message.method.startsWith('notifications/')) continue;
     try {
-      responses.push(await dispatchMcp(message));
+      responses.push(await dispatchMcp(message, access.actor));
     } catch (error) {
-      const messageText = error instanceof Error ? error.message : 'Internal error';
-      const code = error instanceof FactoryApiError ? -32000 : -32603;
-      responses.push(rpcError(message.id ?? null, code, messageText));
+      // Only Factory's own refusals reach the client; anything else may carry runner or database detail.
+      if (error instanceof FactoryApiError) responses.push(rpcError(message.id ?? null, -32000, error.message));
+      else responses.push(rpcError(message.id ?? null, -32603, 'Internal error'));
     }
   }
   if (!responses.length) return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
   return noStore(Array.isArray(body) ? responses : responses[0]);
 }
 
-async function dispatchMcp(message: Rpc) {
+async function dispatchMcp(message: Rpc, actor: FactoryActor) {
   const id = message.id ?? null;
   switch (message.method) {
     case 'initialize':
@@ -114,7 +100,7 @@ async function dispatchMcp(message: Rpc) {
       const args = params.arguments && typeof params.arguments === 'object' && !Array.isArray(params.arguments)
         ? params.arguments as Record<string, unknown>
         : {};
-      const result = await runFactoryOperation(operation.id, args);
+      const result = await runFactoryOperation(operation.id, args, actor);
       return rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result });
     }
     default:

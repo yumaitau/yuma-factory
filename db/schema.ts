@@ -556,3 +556,24 @@ export const agentMessages = sqliteTable(
   },
   (table) => [index("agent_messages_thread_idx").on(table.threadTicketId, table.createdAt)],
 );
+
+/**
+ * Personal API keys for the HTTP API and MCP. A key acts as its owner. Only a SHA-256 digest is
+ * stored; the key is shown once at creation. Keys are created and revoked in the app, never over the API.
+ */
+export const apiKeys = sqliteTable(
+  "api_keys",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    // First characters of the key, so people can tell keys apart.
+    prefix: text("prefix").notNull(),
+    hash: text("hash").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+  },
+  (table) => [uniqueIndex("api_keys_hash_uidx").on(table.hash), index("api_keys_user_idx").on(table.userId)],
+);

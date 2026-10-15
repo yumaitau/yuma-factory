@@ -15,6 +15,7 @@ const NAV = [
   { href: "/memory", label: "Memory" },
   { href: "/agents", label: "Agents" },
   { href: "/pool", label: "Subscriptions" },
+  { href: "/api-keys", label: "API keys" },
 ];
 
 /** Persistent header, rendered once by the (app) layout so navigation only swaps the page below it. */

@@ -15,24 +15,24 @@ import {
 } from '@/lib/queries';
 import { workBoardCards } from '@/lib/work-board-query';
 import { getDb } from '@/lib/db';
-import { createMemory, listMemories, memoriesForTicket, updateMemory } from '@/lib/memory-store';
+import { createMemory, listMemories, memoriesForTicket, memoryHistory, revertMemoryEvent, setProjectMemorySettings, updateMemory } from '@/lib/memory-store';
 import { applyPlan, listPlans, postThreadMessage, rejectPlan, threadMessages } from '@/lib/collab-store';
 import { outstandingPullRequests } from '@/lib/work-review-query';
 import { desc, eq } from 'drizzle-orm';
-import { runs } from '@/db/schema';
+import { memories, memoryEvents, runs } from '@/db/schema';
 import { FACTORY_OPERATIONS } from '@/lib/factory-catalog';
 import {
-  acceptRunReview, mergeRunReview, moveWorkCard, refreshRepos, retryAttention, setAutomationEnabled, setAutomationSize,
-  setTicketRisk, syncTickets,
+  NotFoundError, acceptRunReview, createTicket, mergeRunReview, moveWorkCard, refreshRepos, retryAttention, setAutomationEnabled, setAutomationSize,
+  setTicketRisk, shareSubscription, syncTickets,
 } from '@/lib/factory-control';
 import { assignTicket, createAgent } from '@/lib/queries';
 import { getRunSession } from '@/lib/run-activities';
 import { publicRunOutput } from '@/lib/run-output';
 import { runnerRequest } from '@/lib/codex/runner';
-import { setAccountEnabled, setAccountMaxRuns, visibleAccounts } from '@/lib/codex/accounts';
+import { refreshAccount, setAccountEnabled, setAccountMaxRuns, visibleAccounts } from '@/lib/codex/accounts';
 import { getGithubApp } from '@/lib/github';
 import { reviewContext, reviewState } from '@/lib/review-merge';
-import { MAX_PARALLEL_RUNS, PROVIDERS, validId, type RunResult } from '@/shared/codex';
+import { MAX_PARALLEL_RUNS, PROVIDERS, validId, type AccountStatus, type RunResult } from '@/shared/codex';
 import { TICKET_RISKS } from '@/shared/ticket-risk';
 
 export class FactoryApiError extends Error {
@@ -67,6 +67,8 @@ async function refused<T>(operation: () => Promise<T>): Promise<T> {
     return await operation();
   } catch (error) {
     if (error instanceof FactoryApiError) throw error;
+    if (error instanceof NotFoundError || (error instanceof Error && error.message === 'Subscription not found.'))
+      throw new FactoryApiError(404, error.message);
     throw new FactoryApiError(409, error instanceof Error ? error.message : 'Factory refused this request.');
   }
 }
@@ -195,6 +197,21 @@ export async function runFactoryOperation(id: string, args: Record<string, unkno
         pinned: typeof args.pinned === 'boolean' ? args.pinned : undefined, status: stringArg(args, 'status'),
       }, 'api') }));
     }
+    case 'getMemoryHistory': {
+      const memoryId = idArg(args, 'memoryId');
+      const db = await getDb();
+      if (!(await db.select({ id: memories.id }).from(memories).where(eq(memories.id, memoryId)).get())) throw new FactoryApiError(404, 'Memory not found.');
+      const events = await memoryHistory(db, [memoryId]);
+      return { events: events.map((event) => ({ id: event.id, action: event.action, actor: event.actor, createdAt: event.createdAt,
+        before: event.before ? JSON.parse(event.before) as unknown : null, after: event.after ? JSON.parse(event.after) as unknown : null })) };
+    }
+    case 'revertMemory': {
+      const eventId = idArg(args, 'eventId');
+      const db = await getDb();
+      if (!(await db.select({ id: memoryEvents.id }).from(memoryEvents).where(eq(memoryEvents.id, eventId)).get()))
+        throw new FactoryApiError(404, 'Memory change not found.');
+      return userError(async () => ({ memory: await revertMemoryEvent(db, eventId, actor.userId ? `user:${actor.userId}` : 'api') }));
+    }
     case 'listPlans':
       return { plans: await listPlans(await getDb()) };
     case 'approvePlan':
@@ -305,6 +322,37 @@ export async function runFactoryOperation(id: string, args: Record<string, unkno
       const projectId = idArg(args, 'projectId');
       return refused(() => syncTickets(projectId));
     }
+    case 'createTicket': {
+      const projectId = idArg(args, 'projectId');
+      const title = stringArg(args, 'title');
+      const body = typeof args.body === 'string' ? args.body : '';
+      if (!title || title.length > 256) throw new FactoryApiError(400, 'title is required, up to 256 characters.');
+      if (!body.trim() || body.length > 60_000) throw new FactoryApiError(400, 'body is required, up to 60000 characters.');
+      const risk = args.risk === undefined || args.risk === null ? null : TICKET_RISKS.find((value) => value === args.risk);
+      if (risk === undefined) throw new FactoryApiError(400, 'risk must be low, medium, high or null.');
+      const start = args.start;
+      if (start !== 'queue' && start !== 'plan' && start !== 'none') throw new FactoryApiError(400, 'start must be queue, plan or none.');
+      // Low risk merges without anyone reading the PR. Starting work on it takes a separate, deliberate call.
+      if (risk === 'low' && start !== 'none')
+        throw new FactoryApiError(400, 'A low-risk ticket is created with start none. Queue it with factory_move_ticket once someone has read it.');
+      return refused(() => createTicket(userId, { projectId, title, body, risk, start }));
+    }
+    case 'setProjectSettings': {
+      const projectId = idArg(args, 'projectId');
+      const { memoryBudget, activateLearnings, autoApprovePlans } = args;
+      if (memoryBudget === undefined && activateLearnings === undefined && autoApprovePlans === undefined)
+        throw new FactoryApiError(400, 'Pass memoryBudget, activateLearnings or autoApprovePlans.');
+      if (memoryBudget !== undefined && (typeof memoryBudget !== 'number' || !Number.isInteger(memoryBudget) || memoryBudget < 0 || memoryBudget > 20_000))
+        throw new FactoryApiError(400, 'memoryBudget must be a whole number from 0 to 20000.');
+      for (const [key, value] of Object.entries({ activateLearnings, autoApprovePlans }))
+        if (value !== undefined && typeof value !== 'boolean') throw new FactoryApiError(400, `${key} must be true or false.`);
+      if (!(await listProjects()).some((project) => project.id === projectId)) throw new FactoryApiError(404, 'Project not found.');
+      await setProjectMemorySettings(await getDb(), projectId, {
+        memoryBudget: memoryBudget as number | undefined, activateLearnings: activateLearnings as boolean | undefined,
+        autoApprovePlans: autoApprovePlans as boolean | undefined,
+      });
+      return { ok: true };
+    }
     case 'refreshRepos':
       return refused(() => refreshRepos());
     case 'createAgent': {
@@ -343,6 +391,17 @@ export async function runFactoryOperation(id: string, args: Record<string, unkno
       if (typeof args.enabled === 'boolean') await refused(() => setAutomationEnabled(userId, args.enabled as boolean));
       if (typeof size === 'number') await refused(() => setAutomationSize(userId, size));
       return { automation: await automationStatus() };
+    }
+    case 'shareSubscription': {
+      const accountId = idArg(args, 'accountId');
+      if (typeof args.shared !== 'boolean') throw new FactoryApiError(400, 'shared must be true or false.');
+      await refused(() => shareSubscription(userId, accountId, args.shared as boolean));
+      return { ok: true };
+    }
+    case 'refreshSubscription': {
+      // Sign-in codes and account keys stay in the app.
+      const status = await refused(() => refreshAccount(idArg(args, 'accountId'), userId)) as Partial<AccountStatus>;
+      return { status: status.status, email: status.email ?? null, plan: status.plan ?? null, limits: status.limits ?? null, error: status.error ?? null };
     }
     case 'setSubscription': {
       const accountId = idArg(args, 'accountId');

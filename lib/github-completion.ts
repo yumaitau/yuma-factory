@@ -50,6 +50,8 @@ export async function mergeGreenPullRequest(client: GithubClient, owner: string,
   }
 }
 
+export const riskLabelMeta = (risk: TicketRisk) => RISK_COLORS[risk];
+
 /** Replace Factory-owned <prefix>:risk:* labels. Human severity/risk labels stay. */
 export async function setGithubIssueRisk(client: GithubClient, owner: string, repo: string, issueNumber: number, risk: TicketRisk | null) {
   const params = { owner, repo, issue_number: issueNumber, request: { signal: AbortSignal.timeout(20_000) } };

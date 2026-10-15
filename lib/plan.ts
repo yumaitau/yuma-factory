@@ -80,7 +80,7 @@ export function planTaskFromBody(body: string | null | undefined) {
   return /(?:^|\n)<!-- factory-plan-task:([a-z]+_[a-f0-9]{32}:[a-z0-9][a-z0-9-]*) -->\s*$/.exec(body ?? '')?.[1] ?? null;
 }
 
-const stripMarkers = (value: string) => value.replace(/<!--\s*factory-plan-task:[^>]*-->/gi, '');
+export const stripMarkers = (value: string) => value.replace(/<!--\s*factory-plan-task:[^>]*-->/gi, '');
 
 export function subtaskIssueBody(task: PlanTask, epicNumber: number, issueByKey: Map<string, number>, planId: string) {
   const deps = task.dependsOn.map((dep) => issueByKey.get(dep)).filter((value): value is number => !!value);

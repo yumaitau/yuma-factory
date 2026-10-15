@@ -1,5 +1,5 @@
 diff --git a/dist/cli/build/patches/plugins/load-manifest.js b/dist/cli/build/patches/plugins/load-manifest.js
-index b0616a9a1a2729c3bc1cf03dd88edde8afa09d08..78de2b802e6aa702d4fdf40da219489ac7abe1d8 100644
+index bff72bd613f34fc7e2f785f0961c15678d524a71..c6758d696e908fbdbcd824783f8c3a085319d4fa 100644
 --- a/dist/cli/build/patches/plugins/load-manifest.js
 +++ b/dist/cli/build/patches/plugins/load-manifest.js
 @@ -31,7 +31,7 @@ async function getLoadManifestRule(buildOpts) {
@@ -9,5 +9,5 @@ index b0616a9a1a2729c3bc1cf03dd88edde8afa09d08..78de2b802e6aa702d4fdf40da219489a
 -    const manifests = await glob(join(dotNextDir, "**/{*-manifest,required-server-files,prefetch-hints}.json"), {
 +    const manifests = await glob(join(dotNextDir, "**/{*-manifest,required-server-files,prefetch-hints,preview-props}.json"), {
          windowsPathsNoEscape: true,
+         nodir: true,
      });
-     const returnManifests = (await Promise.all(manifests.map(async (manifest) => `

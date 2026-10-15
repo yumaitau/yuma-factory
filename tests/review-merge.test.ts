@@ -97,6 +97,8 @@ test('the low-risk path leaves a Next or OpenNext version change for a person', 
     const bump = { filename: 'apps/web/package.json', patch: '@@ -2,3 +2,3 @@\n-    "next": "16.3.8",\n+    "next": "16.4.1",' };
     const gh = github({ labels: ['factory:risk:low'], files: [{ filename: 'README.md', patch: '+next' }, bump] });
     await assert.rejects(factoryMerge(db, gh.client, await context(), A, fast), /apps\/web\/package\.json changes the Next or OpenNext version/);
+    const compact = { filename: 'package.json', patch: '-{"dependencies":{"next":"16.3.8"}}\n+{"dependencies":{"next":"16.4.1"}}' };
+    await assert.rejects(factoryMerge(db, github({ labels: ['factory:risk:low'], files: [compact] }).client, await context(), A, fast), /changes the Next/);
     // A package.json too large for GitHub to send a patch is treated as one.
     await assert.rejects(factoryMerge(db, github({ labels: ['factory:risk:low'], files: [{ filename: 'package.json' }] }).client, await context(), A, fast), /changes the Next/);
     assert.equal(gh.merges(), 0);

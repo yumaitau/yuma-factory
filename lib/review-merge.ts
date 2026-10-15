@@ -126,7 +126,7 @@ export async function mergeReview(db: Db, client: Client, context: ReviewContext
 }
 
 // Next and OpenNext upgrades have taken Cloudflare apps down with CI green, so a person merges them.
-const RUNTIME_VERSION_LINE = /^[+-]\s*"(?:next|@opennextjs\/[^"]+)"\s*:/m;
+const RUNTIME_VERSION_LINE = /^[+-].*"(?:next|@opennextjs\/[^"]+)"\s*:/m;
 
 /** package.json files in the pull request that change the Next or OpenNext version. A file GitHub sends without a patch counts. */
 export async function runtimeUpgradeFiles(client: Client, context: ReviewContext): Promise<string[]> {

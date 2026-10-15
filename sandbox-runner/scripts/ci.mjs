@@ -125,11 +125,28 @@ export const PENDING_CI_MS = 2 * 60 * 60_000;
 // Repairs in a row that change nothing before the PR is left for a human.
 export const MAX_IDLE_REPAIRS = 3;
 
-// GitHub refuses to start jobs when the account's Actions billing is blocked.
+// GitHub refuses to start or finish jobs when an account or repository limit is hit.
 // No code change can fix that, so repairing only burns the subscription.
-const ACCOUNT_BLOCKED_CI = /job was not started because recent account payments have failed|spending limit needs to be increased/i;
-export function isAccountBlockedCI(diagnostics) {
-  return ACCOUNT_BLOCKED_CI.test(diagnostics ?? "");
+const NOT_STARTED = [
+  [/recent account payments have failed|spending limit needs to be increased|Actions budget|budget is preventing further use/i,
+    "the account's Actions billing, budget or spending limit is blocking jobs"],
+  [/The job was not started because/i, "GitHub did not start the jobs"],
+];
+const QUOTA = /Artifact storage quota has been hit/i;
+const UPLOAD_STEP = /upload[-_ ]?artifact|upload .*(report|artifact|result)/i;
+
+/**
+ * Why GitHub, not the code, failed one Actions job; null when the failure may be the code's.
+ * `text` is the check's output and annotations, which job output can also write, so the job's
+ * steps must agree: a job that was not started ran no steps, and a quota failure failed only uploads.
+ */
+export function githubBlockReason(text, steps) {
+  if (!Array.isArray(steps)) return null;
+  const reason = NOT_STARTED.find(([pattern]) => pattern.test(text ?? ""))?.[1];
+  if (reason) return steps.length === 0 ? reason : null;
+  if (!QUOTA.test(text ?? "")) return null;
+  const failed = steps.filter((step) => step.conclusion && !isPassingConclusion(step.conclusion));
+  return failed.length && failed.every((step) => UPLOAD_STEP.test(step.name ?? "")) ? "the repository's Actions artifact storage quota is full" : null;
 }
 
 /**

@@ -12,16 +12,21 @@ export const FAILURE_TAIL = 1500;
 /**
  * retry: worth another attempt with the failure in the prompt.
  * retry_once: the agent produced nothing; one fresh attempt, then a person decides.
- * human: only a person can fix the cause, such as billing, permissions, CI configuration or a closed PR.
+ * wait: GitHub would not run CI (billing, budget, quota). A person fixes the setting; Factory checks the PR again later.
+ * human: only a person can fix the cause, such as permissions, CI configuration or a closed PR.
  */
-export const FAILURE_KINDS = ['retry', 'retry_once', 'human'] as const;
+export const FAILURE_KINDS = ['retry', 'retry_once', 'wait', 'human'] as const;
 export type FailureKind = (typeof FAILURE_KINDS)[number];
-export const RETRY_BUDGET: Record<FailureKind, number> = { retry: MAX_AUTO_RETRIES, retry_once: 1, human: 0 };
+/** A GitHub block is re-checked at 1, 3, 6, 12, 24 and 24 hours: about three days. */
+export const WAIT_BACKOFF_MINUTES = [60, 180, 360, 720, 1440, 1440] as const;
+export const RETRY_BUDGET: Record<FailureKind, number> = { retry: MAX_AUTO_RETRIES, retry_once: 1, wait: WAIT_BACKOFF_MINUTES.length, human: 0 };
 
 // Bad planner output is model output, and a plan run never publishes, so a retry is safe.
 const PLANNER_OUTPUT = /Planner did not write a valid plan file|Planner returned an invalid proposal/;
 // Rerunning rarely changes these, often because the work already landed. One fresh look, no more.
 const NOTHING_PRODUCED = /produced no file changes|CI still failing after \d+ repairs that changed nothing/;
+// A re-check costs no agent work: the run resumes the PR branch and only reads CI.
+const GITHUB_BLOCKED = /GitHub did not run CI jobs/;
 
 /** Classify a finished run. The runner marks failures it must not repeat `retryable: false`. */
 export function failureKind(result: Pick<RunResult, 'status' | 'retryable' | 'log' | 'accountStatus'>, mode: string): FailureKind | null {
@@ -30,6 +35,7 @@ export function failureKind(result: Pick<RunResult, 'status' | 'retryable' | 'lo
   if (result.accountStatus?.status === 'disconnected' || result.accountStatus?.status === 'error') return 'human';
   const tail = result.log.slice(-FAILURE_TAIL);
   if (mode === 'plan' && PLANNER_OUTPUT.test(tail)) return 'retry';
+  if (mode !== 'plan' && GITHUB_BLOCKED.test(tail)) return 'wait';
   if (mode !== 'plan' && NOTHING_PRODUCED.test(tail)) return 'retry_once';
   return result.retryable === false ? 'human' : 'retry';
 }
@@ -45,9 +51,13 @@ const isFailureKind = (value: string | null): value is FailureKind => FAILURE_KI
 /** A follow-up continues a run at attempt 1; an automatic retry always has attempt 2 or more. */
 export const isFollowUp = (run: { parentRunId: string | null; attempt: number }) => !!run.parentRunId && run.attempt === 1;
 
-/** Retry n (1-based) waits this long after the failure. */
-export const retryDelayMs = (retry: number) =>
-  RETRY_BACKOFF_MINUTES[Math.min(Math.max(retry, 1), RETRY_BACKOFF_MINUTES.length) - 1] * 60_000;
+const backoff = (kind?: FailureKind): readonly number[] => kind === 'wait' ? WAIT_BACKOFF_MINUTES : RETRY_BACKOFF_MINUTES;
+
+/** Retry n (1-based) of this kind waits this long after the failure. */
+export const retryDelayMs = (retry: number, kind?: FailureKind) => {
+  const minutes = backoff(kind);
+  return minutes[Math.min(Math.max(retry, 1), minutes.length) - 1] * 60_000;
+};
 
 /** The automatic retry a failed run earns, or null when a person must decide. Mirrors retryDue() in SQL. */
 export function nextRetry(run: RetryRun): { number: number; of: number; at: Date } | null {
@@ -56,7 +66,7 @@ export function nextRetry(run: RetryRun): { number: number; of: number; at: Date
   // attempt 1 failed, so this is retry 1.
   const number = run.attempt;
   if (number > of) return null;
-  return { number, of, at: new Date(run.finishedAt.getTime() + retryDelayMs(number)) };
+  return { number, of, at: new Date(run.finishedAt.getTime() + retryDelayMs(number, run.failureKind)) };
 }
 
 export function failureTail(log: string) {
@@ -68,8 +78,10 @@ export function failureTail(log: string) {
  * What a retry takes from the failed run: the next attempt number, its failure, and its branch while
  * the PR can still take commits, so the retry continues that PR instead of opening another.
  */
-export function retryFrom(run: { id: string; attempt: number; mode: string; branchName: string | null; pullRequestState: string | null; log: string }) {
+export function retryFrom(run: { id: string; attempt: number; mode: string; branchName: string | null; pullRequestState: string | null; log: string; failureKind?: string | null }) {
   const continuing = run.mode === 'implement' && !!run.branchName && !['merged', 'closed'].includes(run.pullRequestState ?? '');
-  return { parentRunId: run.id, attempt: run.attempt + 1, branchName: continuing ? run.branchName : null, failure: failureTail(run.log) };
+  return { parentRunId: run.id, attempt: run.attempt + 1, branchName: continuing ? run.branchName : null, failure: failureTail(run.log),
+    // GitHub, not the code, failed CI: re-check the open PR without spending an agent session.
+    recheck: continuing && run.failureKind === 'wait' };
 }
 export type RetryRequest = ReturnType<typeof retryFrom>;

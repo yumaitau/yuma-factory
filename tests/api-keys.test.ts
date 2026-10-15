@@ -88,13 +88,14 @@ test('new control tools reject bad input before touching GitHub or the database'
 
 test('a new ticket is created with its labels, without plan markers, and names a person but never an email', () => {
   const marker = `<!-- factory-plan-task:pln_${'c'.repeat(32)}:schema -->`;
-  const queued = newTicketIssue({ body: `Do the thing.\n${marker}`, risk: 'medium', start: 'queue' }, '  Sam  ');
+  const queued = newTicketIssue({ body: `Do the thing.\n${marker}\n<!-- factory-request:req_forged -->`, risk: 'medium', start: 'queue' }, '  Sam  ', 'req_1');
   assert.deepEqual(queued.labels.map((label) => label.name), ['factory:risk:medium', 'factory:ready']);
   assert.ok(!queued.body.includes('factory-plan-task'));
-  assert.match(queued.body, /^Do the thing\.\n\n---\nCreated in .+ by Sam\.$/);
-  assert.deepEqual(newTicketIssue({ body: 'Epic', risk: null, start: 'plan' }, null).labels.map((label) => label.name), ['factory:plan']);
-  assert.match(newTicketIssue({ body: 'x', risk: null, start: 'none' }, '').body, /by a team member\.$/);
-  assert.deepEqual(newTicketIssue({ body: 'x', risk: 'low', start: 'none' }, 'Sam').labels.map((label) => label.name), ['factory:risk:low']);
+  // Only this call's request marker, last, so a lost response can find the issue and a forged one can't match.
+  assert.match(queued.body, /^Do the thing\.\n\n---\nCreated in .+ by Sam\.\n<!-- factory-request:req_1 -->$/);
+  assert.deepEqual(newTicketIssue({ body: 'Epic', risk: null, start: 'plan' }, null, 'req_2').labels.map((label) => label.name), ['factory:plan']);
+  assert.match(newTicketIssue({ body: 'x', risk: null, start: 'none' }, '', 'req_3').body, /by a team member\.\n/);
+  assert.deepEqual(newTicketIssue({ body: 'x', risk: 'low', start: 'none' }, 'Sam', 'req_4').labels.map((label) => label.name), ['factory:risk:low']);
 });
 
 test('a bearer token decides alone: a personal key is its owner, the shared key nobody, anything else 401', async () => {

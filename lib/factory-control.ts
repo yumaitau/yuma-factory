@@ -49,12 +49,27 @@ export async function refreshRepos() {
  * The issue a new ticket opens: its body with any plan markers removed (they would let it pose as a planner
  * subtask) and a footer naming the person, never their email, plus the labels to create it with.
  */
-export function newTicketIssue(input: Pick<NewTicket, 'body' | 'risk' | 'start'>, personName: string | null) {
+export function newTicketIssue(input: Pick<NewTicket, 'body' | 'risk' | 'start'>, personName: string | null, requestId: string) {
   const labels: { name: string; color: string; description: string }[] = [];
   if (input.risk) labels.push({ name: riskLabel(input.risk, LABEL_PREFIX), ...riskLabelMeta(input.risk) });
   if (input.start === 'queue') labels.push({ name: LABELS.ready, color: '1F6FEB', description: `${APP_NAME} picks this ticket up automatically.` });
   if (input.start === 'plan') labels.push({ name: LABELS.plan, color: '8250DF', description: `${APP_NAME} plans this epic into subtasks.` });
-  return { body: `${stripMarkers(input.body).trim()}\n\n---\nCreated in ${APP_NAME} by ${personName?.trim() || 'a team member'}.`, labels };
+  const footer = `Created in ${APP_NAME} by ${personName?.trim() || 'a team member'}.`;
+  return { body: `${stripMarkers(input.body).replace(/<!--\s*factory-request:[^>]*-->/gi, '').trim()}\n\n---\n${footer}\n${requestMarker(requestId)}`, labels };
+}
+
+const requestMarker = (requestId: string) => `<!-- factory-request:${requestId} -->`;
+
+type CreatedIssue = { id: number | bigint; number: number; title: string; body?: string | null; state: string; html_url: string;
+  labels: (string | { name?: string })[]; pull_request?: unknown; user?: { type?: string } | null };
+
+/** The App's issue carrying this call's marker, created since `since`; null when GitHub never created it. */
+async function findCreatedIssue(client: Awaited<ReturnType<ReturnType<typeof getGithubApp>['getInstallationOctokit']>>,
+  params: { owner: string; repo: string; request: { signal: AbortSignal } }, since: Date, requestId: string) {
+  const { data } = await client.request('GET /repos/{owner}/{repo}/issues', {
+    ...params, state: 'all', since: since.toISOString(), sort: 'created', direction: 'desc', per_page: 100,
+  });
+  return (data as CreatedIssue[]).find((issue) => !issue.pull_request && issue.user?.type === 'Bot' && issue.body?.includes(requestMarker(requestId))) ?? null;
 }
 
 export type NewTicket = { projectId: string; title: string; body: string; risk: TicketRisk | null; start: 'queue' | 'plan' | 'none' };
@@ -75,9 +90,19 @@ export async function createTicket(userId: string, input: NewTicket) {
   const [owner, repo] = project.repoFullName.split('/');
   const client = await getGithubApp().getInstallationOctokit(installation.installationId);
   const params = { owner, repo, request: { signal: AbortSignal.timeout(20_000) } };
-  const { body, labels } = newTicketIssue(input, person?.name ?? null);
+  // A hidden per-call marker finds the issue again when GitHub created it but its response was lost.
+  const requestId = newId('req');
+  const { body, labels } = newTicketIssue(input, person?.name ?? null, requestId);
   for (const label of labels) await ensureRepoLabel(client, params, label.name, label.color, label.description);
-  const { data: issue } = await client.request('POST /repos/{owner}/{repo}/issues', { ...params, title: input.title, body, labels: labels.map((label) => label.name) });
+  const startedAt = new Date(Date.now() - 60_000);
+  let issue: CreatedIssue;
+  try {
+    ({ data: issue } = await client.request('POST /repos/{owner}/{repo}/issues', { ...params, title: input.title, body, labels: labels.map((label) => label.name) }));
+  } catch (error) {
+    const found = await findCreatedIssue(client, { owner, repo, request: { signal: AbortSignal.timeout(20_000) } }, startedAt, requestId).catch(() => null);
+    if (!found) throw error;
+    issue = found;
+  }
   const created = { issueNumber: issue.number, url: issue.html_url };
   // The issue exists from here on: report it even if recording it fails, so a retry doesn't open another.
   try {

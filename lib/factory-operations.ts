@@ -19,7 +19,7 @@ import { createMemory, listMemories, memoriesForTicket, memoryHistory, revertMem
 import { applyPlan, listPlans, postThreadMessage, rejectPlan, threadMessages } from '@/lib/collab-store';
 import { outstandingPullRequests } from '@/lib/work-review-query';
 import { desc, eq } from 'drizzle-orm';
-import { memoryEvents, runs } from '@/db/schema';
+import { memories, memoryEvents, runs } from '@/db/schema';
 import { FACTORY_OPERATIONS } from '@/lib/factory-catalog';
 import {
   NotFoundError, acceptRunReview, createTicket, mergeRunReview, moveWorkCard, refreshRepos, retryAttention, setAutomationEnabled, setAutomationSize,
@@ -200,7 +200,7 @@ export async function runFactoryOperation(id: string, args: Record<string, unkno
     case 'getMemoryHistory': {
       const memoryId = idArg(args, 'memoryId');
       const db = await getDb();
-      if (!(await listMemories(db)).some((memory) => memory.id === memoryId)) throw new FactoryApiError(404, 'Memory not found.');
+      if (!(await db.select({ id: memories.id }).from(memories).where(eq(memories.id, memoryId)).get())) throw new FactoryApiError(404, 'Memory not found.');
       const events = await memoryHistory(db, [memoryId]);
       return { events: events.map((event) => ({ id: event.id, action: event.action, actor: event.actor, createdAt: event.createdAt,
         before: event.before ? JSON.parse(event.before) as unknown : null, after: event.after ? JSON.parse(event.after) as unknown : null })) };

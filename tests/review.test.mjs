@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_REVIEW_FIXES, isDependencyBump, parseFindings, reviewPrompt, reviewUntilClean } from "../sandbox-runner/scripts/review.mjs";
+import { MAX_REVIEW_FIXES, isBlocking, isDependencyBump, issueNumbers, parseFindings, reviewPrompt, reviewUntilClean } from "../sandbox-runner/scripts/review.mjs";
 
 const diff = (path, ...lines) => `diff --git a/${path} b/${path}\nindex 1..2 100644\n--- a/${path}\n+++ b/${path}\n@@ -1,3 +1,3 @@\n ${"context"}\n${lines.join("\n")}\n`;
 
@@ -75,7 +75,7 @@ test("blocking findings are fixed and re-reviewed until clean or the fix budget 
     review: async (previous, response) => { reviews.push({ previous, response }); return verdicts.shift(); },
     fix: async (findings) => { fixes.push(findings); return "fixed it"; },
   });
-  assert.deepEqual(clean, { verdict: "clean", findings: [low] });
+  assert.deepEqual(clean, { verdict: "clean", findings: [low], waits: [] });
   assert.deepEqual(fixes, [[high]]);
   assert.deepEqual(reviews[1], { previous: [high], response: "fixed it" });
 
@@ -84,7 +84,7 @@ test("blocking findings are fixed and re-reviewed until clean or the fix budget 
   assert.equal(stuck.verdict, "unresolved");
   assert.equal(fixCount, MAX_REVIEW_FIXES);
 
-  assert.deepEqual(await reviewUntilClean({ progress, review: async () => null, fix: async () => assert.fail() }), { verdict: "missing", findings: [] });
+  assert.deepEqual(await reviewUntilClean({ progress, review: async () => null, fix: async () => assert.fail() }), { verdict: "missing", findings: [], waits: [] });
 });
 
 test("the review prompt carries the earlier findings and forbids edits", () => {
@@ -93,4 +93,34 @@ test("the review prompt carries the earlier findings and forbids edits", () => {
   assert.match(prompt, /Do NOT edit/);
   assert.match(prompt, /\[high\] a\.ts:2: bug/);
   assert.match(prompt, /Author's reply:\ndone/);
+});
+
+test("work waiting on other issues is not a defect to fix, and stops the fix loop", async () => {
+  assert.deepEqual(issueNumbers(["#473", 475, "473", " #12 "], 476), [473, 475, 12]);
+  // Only plain issue numbers in this repository: no other repos, decimals, prose or the ticket itself.
+  assert.deepEqual(issueNumbers(["yumaitau/paperboy#12", 4.5, "migration 0012", "#476", -3], 476), []);
+  assert.deepEqual(issueNumbers("#473", 1), []);
+  const [blocked, plain, high] = parseFindings({ findings: [
+    { severity: "medium", problem: "No gap_finding storage", blockedBy: [475, "#476"] },
+    { severity: "medium", problem: "UI button missing" },
+    { severity: "high", problem: "Null crash in seed", blockedBy: [475] },
+  ] }, 476);
+  assert.deepEqual(blocked.blockedBy, [475]);
+  assert.equal(plain.blockedBy, undefined);
+  assert.equal(isBlocking(blocked), false);
+  assert.equal(isBlocking(plain), true);
+  // A high finding is a defect in the written code: blockedBy never excuses it.
+  assert.equal(isBlocking(high), true);
+
+  // The fixable part is fixed; what remains waits on #475, so there is no further fix pass.
+  const verdicts = [[blocked, plain], [blocked]];
+  let fixes = 0;
+  const outcome = await reviewUntilClean({ progress: async () => {}, review: async () => verdicts.shift(), fix: async () => { fixes++; return ""; } });
+  assert.deepEqual(outcome, { verdict: "blocked", findings: [blocked], waits: [blocked] });
+  assert.equal(fixes, 1);
+  // A later round that drops the blocked finding does not lose it.
+  const rounds = [[blocked, plain], []];
+  const dropped = await reviewUntilClean({ progress: async () => {}, review: async () => rounds.shift(), fix: async () => "" });
+  assert.deepEqual(dropped, { verdict: "blocked", findings: [], waits: [blocked] });
+  assert.match(reviewPrompt({ task: "t", diffFile: "d" }), /blockedBy .* only on a medium finding/);
 });

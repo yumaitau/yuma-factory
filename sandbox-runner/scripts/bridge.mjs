@@ -6,7 +6,7 @@ import readline from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
 import { agentPlan, claudeActivities, claudeLimits, claudeOutput, codexActivity, executionOutput, jsonLines, redactOutput } from "./output.mjs";
 import { startProxy } from "./workers-ai.mjs";
-import { MAX_REVIEW_FIXES, alreadyDonePrompt, fixPrompt, formatFindings, isBlocking, isDependencyBump, parseFindings, reviewPrompt, reviewUntilClean } from "./review.mjs";
+import { MAX_REVIEW_FIXES, alreadyDonePrompt, fixPrompt, formatFindings, isBlockedOnIssues, isBlocking, isDependencyBump, parseFindings, reviewPrompt, reviewUntilClean } from "./review.mjs";
 
 const root = "/factory";
 const home = "/home/factory/.codex";
@@ -754,6 +754,17 @@ async function run() {
       let reviewedTree;
       // The last review's outcome, for the PR description.
       let reviewNote = "";
+      // Requirements that need other issues' unmerged work. The work so far is pushed for review,
+      // but the issue stays open and nothing merges automatically until a person decides.
+      const waitsOn = [];
+      // Later runs on this branch (recovery, CI re-checks, retries) do not repeat the review, so the
+      // hold is recorded on the issue itself. A person removes the label once the work is complete.
+      const waitsLabel = `${req.labelPrefix ?? "factory"}:waits-on`;
+      const markWaiting = () => github(`/issues/${req.issueNumber}/labels`, "POST", { labels: [waitsLabel] });
+      const issueWaits = async () => labelNames((await github(`/issues/${req.issueNumber}`)).labels)
+        .some((label) => label.toLowerCase() === waitsLabel.toLowerCase());
+      // Set when green CI did not close the issue because work is still outstanding.
+      let heldOpen = false;
       // Unresolved findings make the ticket no longer low risk, so neither Factory nor the app merges it unread.
       // Runs before the push: if it fails, nothing unreviewed reaches a branch that could merge automatically.
       const dropLowRisk = async () => {
@@ -784,20 +795,25 @@ async function run() {
             await readAgentJson("review");
             await execute(reviewPrompt({ task: req.prompt, diffFile, previous, response }), { notes: false });
             await restoreTree(tree);
-            return parseFindings(await readAgentJson("review"));
+            return parseFindings(await readAgentJson("review"), req.issueNumber);
           },
           fix: (findings) => execute(fixPrompt(req.prompt, findings), { notes: false }),
         });
         let concerns = null;
-        if (outcome.verdict === "clean") {
-          reviewNote = outcome.findings.length
-            ? `Adversarial review passed with minor notes:\n${formatFindings(outcome.findings)}`
-            : "Adversarial review passed.";
+        // Whatever the verdict, work waiting on other issues is recorded; it is not this checkout's to fix.
+        const blocked = outcome.waits;
+        for (const finding of blocked) if (!waitsOn.some((known) => known.problem === finding.problem)) waitsOn.push(finding);
+        const waitNote = blocked.length ? `\n\nWaits on other issues' unmerged work:\n${formatFindings(blocked)}` : "";
+        if (outcome.verdict === "clean" || outcome.verdict === "blocked") {
+          reviewNote = (outcome.findings.some((finding) => !isBlockedOnIssues(finding))
+            ? `Adversarial review passed with minor notes:\n${formatFindings(outcome.findings.filter((finding) => !isBlockedOnIssues(finding)))}`
+            : "Adversarial review passed.") + waitNote;
           await progress(reviewNote);
+          if (blocked.length) concerns = reviewNote;
         } else {
-          concerns = reviewNote = outcome.verdict === "missing"
+          concerns = reviewNote = (outcome.verdict === "missing"
             ? "The adversarial reviewer gave no verdict, so these changes are unreviewed."
-            : `The adversarial review still reports these problems after ${MAX_REVIEW_FIXES} fix passes:\n${formatFindings(outcome.findings.filter(isBlocking))}`;
+            : `The adversarial review still reports these problems after ${MAX_REVIEW_FIXES} fix passes:\n${formatFindings(outcome.findings.filter(isBlocking))}`) + waitNote;
           await progress(`${concerns}\nPushing for human review; automatic merge is off for this ticket.`);
         }
         // A blocking verdict after the last fix pass means its fixes were never reviewed: publish the reviewed tree.
@@ -823,6 +839,8 @@ async function run() {
         }
         await assertNoCiConfig(reviewed);
         if (concerns) await dropLowRisk();
+        // Before the push, like the label drop: a failure must not leave outstanding work closable.
+        if (waitsOn.length) await markWaiting();
         const patch = { stdout: await treeDiff(baseTree, reviewed, ["--binary", "--full-index"]) };
         const publish = `${root}/publish`;
         const credentialEnv = {
@@ -904,6 +922,7 @@ async function run() {
         }).catch(() => progress("Could not post the review findings on the issue."));
         return true;
       };
+      const waitingIssues = () => [...new Set(waitsOn.flatMap((finding) => finding.blockedBy))].sort((a, b) => a - b).map((n) => `#${n}`).join(", ");
       const closeGitHubIssue = async () => {
         await github(`/issues/${req.issueNumber}`, "PATCH", { state: "closed", state_reason: "completed" });
       };
@@ -1047,6 +1066,14 @@ async function run() {
             const confirmed = await snapshot();
             if (confirmed.sha !== sha || confirmed.state !== "green" || confirmed.blocked || confirmed.closed)
               throw new Error("CI changed before issue closure. Ticket left open.");
+            // Green CI does not finish a ticket whose requirements wait on other issues.
+            if (waitsOn.length || await issueWaits()) {
+              heldOpen = true;
+              await progress(waitsOn.length
+                ? `CI green. Issue left open for review: parts of it wait on ${waitingIssues()}.`
+                : `CI green. Issue left open for review: it is labelled ${waitsLabel}. Remove the label once the outstanding work is done.`);
+              return;
+            }
             const issue = await github(`/issues/${req.issueNumber}`);
             if (!isLowRisk(labelNames(issue.labels), req.labelPrefix)) {
               await closeGitHubIssue();
@@ -1139,6 +1166,11 @@ async function run() {
           snapshot: () => snapshotCommit(mergeSha),
           repair: (current) => repairMain(mergeSha, current),
           done: async () => {
+            if (waitsOn.length || await issueWaits()) {
+              heldOpen = true;
+              await progress(`Main pipeline green. Issue left open for review: it is labelled ${waitsLabel}.`);
+              return;
+            }
             await closeGitHubIssue();
             await progress("Main pipeline green. GitHub issue closed.");
           },
@@ -1169,8 +1201,8 @@ async function run() {
         await progress("PR ready for review. Waiting for CI.");
         ciHeadSha = await supervise(pr);
       }
-      // No CI on the PR: the work is done but unverified, so it waits in review with the issue open.
-      result = ciHeadSha ? { status: "succeeded", pullRequestUrl, ciHeadSha, issueClosed: true }
+      // No CI on the PR, or work waiting on other issues: it waits in review with the issue open.
+      result = ciHeadSha && !heldOpen ? { status: "succeeded", pullRequestUrl, ciHeadSha, issueClosed: true }
         : alreadyDone ? { status: "succeeded", alreadyDone: true } : { status: "succeeded", pullRequestUrl };
     } else result = { status: "succeeded" };
   } catch (e) {

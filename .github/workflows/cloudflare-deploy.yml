@@ -84,16 +84,19 @@ jobs:
         grep -q '<title>Yuma Factory</title>' /tmp/factory-home.html
     - name: Smoke test API routes
       id: smoke
-      # Next/OpenNext upgrades have broken every route handler while pages still rendered.
+      # Next/OpenNext upgrades have broken every route handler while pages still rendered, and
+      # have hung a share of requests. Wait for the new version to serve, then every request must pass.
       if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
       run: |
+        for attempt in $(seq 1 12); do
+          [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 30 https://factory.yumait.au/api/health)" = 200 ] && break
+          sleep 5
+        done
         check() {
-          for attempt in 1 2 3 4 5; do
+          for request in $(seq 1 15); do
             status=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 30 "https://factory.yumait.au$1")
-            [ "$status" = "$2" ] && return 0
-            sleep 5
+            [ "$status" = "$2" ] || { echo "$1 returned $status on request $request, expected $2"; return 1; }
           done
-          echo "$1 returned $status, expected $2"; return 1
         }
         check /api/health 200
         check /api/auth/get-session 200

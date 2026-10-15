@@ -57,6 +57,21 @@ export function newFailures(results, base) {
   return results.filter((result) => !result.ok && !failedOnBase.has(result.name));
 }
 
+/**
+ * Pins the checks that ran on the first pass whose install worked, and counts any of them missing later as
+ * failing: a fix that removes a check's script, or the lockfile, has not fixed it. `results` is null when no
+ * checks ran at all. The install itself is never pinned; a later pass whose install fails reports that instead.
+ */
+export function withRemovedChecks(results, expected) {
+  if (!results) return { results: [{ name: "checks", ok: false, output: "The repository's checks no longer run: its package.json scripts or lockfile were removed. Restore them." }], expected };
+  const ran = new Set(results.map((result) => result.name));
+  if (ran.has("install")) return { results, expected };
+  const pinned = expected ?? [...ran];
+  const removed = pinned.filter((name) => !ran.has(name))
+    .map((name) => ({ name, ok: false, output: "This check no longer runs: its script or the lockfile was removed. Restore it." }));
+  return { results: [...results, ...removed], expected: pinned };
+}
+
 export const checkNames = (results) => results.map((result) => result.name).join(", ");
 
 export function checkFixPrompt(task, failures) {

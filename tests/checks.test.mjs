@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkFixPrompt, checkPlan, failureOutput, newFailures } from "../sandbox-runner/scripts/checks.mjs";
+import { checkFixPrompt, checkPlan, failureOutput, newFailures, withRemovedChecks } from "../sandbox-runner/scripts/checks.mjs";
 
 const pkg = (scripts) => JSON.stringify({ name: "app", scripts });
 
@@ -59,4 +59,19 @@ test("failure output keeps the tail, and the fix prompt forbids weakening the ch
   assert.match(prompt, /## typecheck failed\nsrc\/a\.ts/);
   assert.match(prompt, /Do not weaken or skip tests/);
   assert.match(prompt, /Do not commit, push/);
+});
+
+test("a fix pass can't pass by removing a check, and a repaired install is not a failure", () => {
+  const ok = (name) => ({ name, ok: true });
+  // Pass 0 fails to install (lockfile out of date); the fix repairs it and every check then runs and passes.
+  let state = withRemovedChecks([{ name: "install", ok: false }], undefined);
+  assert.equal(state.expected, undefined);
+  state = withRemovedChecks([ok("lint"), ok("test"), ok("build")], state.expected);
+  assert.deepEqual(state.results.filter((result) => !result.ok), []);
+  assert.deepEqual(state.expected, ["lint", "test", "build"]);
+  // A later fix deletes the test script: it counts as failing.
+  state = withRemovedChecks([ok("lint"), ok("build")], state.expected);
+  assert.deepEqual(state.results.filter((result) => !result.ok).map((result) => result.name), ["test"]);
+  // A later fix removes the lockfile, so nothing runs.
+  assert.deepEqual(withRemovedChecks(null, state.expected).results.map((result) => [result.name, result.ok]), [["checks", false]]);
 });

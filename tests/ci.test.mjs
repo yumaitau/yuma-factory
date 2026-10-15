@@ -180,7 +180,7 @@ test("stalled main pipeline terminates without closing the issue or restarting c
     progress: async () => {},
     wait: async () => { time += 15 * 60_000; },
     now: () => time,
-  }), (error) => error.retryable === false && /Main pipeline did not complete/.test(error.message));
+  }), (error) => error.retryable === false && /Main pipeline did not complete within 2 hours/.test(error.message) && time >= 2 * 60 * 60_000);
 });
 
 test("main pipeline can register late and finish green before the wait expires", async () => {

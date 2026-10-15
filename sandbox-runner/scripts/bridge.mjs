@@ -904,7 +904,7 @@ async function run() {
        * the failures left on it, or null when the repository has no checks Factory can run. CI still runs them all.
        * Each fix pass re-runs every check, so a flaky check that passes the next time stops counting.
        */
-      const checkLocally = async () => {
+      const checkLocally = async ({ fixes = MAX_CHECK_FIXES } = {}) => {
         // The checks that ran once the install worked. A fix pass that removes one, or the lockfile, has not fixed it.
         let expected;
         for (let pass = 0; ; pass++) {
@@ -927,8 +927,8 @@ async function run() {
             await progress(`Local checks ${checkNames(failed)} also fail before this change or can't be compared here, so CI decides them.`);
             return { tree, failures: [] };
           }
-          if (pass === MAX_CHECK_FIXES) {
-            await progress(`Local checks still fail after ${MAX_CHECK_FIXES} fix passes: ${checkNames(introduced)}.`);
+          if (pass === fixes) {
+            await progress(`Local checks still fail after ${fixes} fix passes: ${checkNames(introduced)}.`);
             return { tree, failures: introduced };
           }
           await progress(`Local checks failed: ${checkNames(introduced)}. Fixing before push.`);
@@ -952,7 +952,11 @@ async function run() {
         // Review fixes change code the checks passed: check once more, and review any fixes that makes.
         if (checked && reviewed !== checked.tree) {
           checked = await checkLocally();
-          if (checked && checked.tree !== reviewed) ({ tree: reviewed, concerns } = await reviewChanges(checked.tree));
+          if (checked && checked.tree !== reviewed) {
+            ({ tree: reviewed, concerns } = await reviewChanges(checked.tree));
+            // The failures reported are always the pushed tree's: check what that review left, without fixing it.
+            if (reviewed !== checked.tree) checked = await checkLocally({ fixes: 0 });
+          }
         }
         if (checked?.failures.length) concerns = [concerns, `These checks fail locally with this change but passed before it: ${checkNames(checked.failures)}.`]
           .filter(Boolean).join("\n\n");

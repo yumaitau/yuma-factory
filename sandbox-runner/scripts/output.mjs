@@ -195,3 +195,8 @@ export function agentPlan(event) {
   const status = { pending: "pending", in_progress: "inProgress", completed: "completed" };
   return todo.input.todos.slice(0, 50).map((step) => ({ content: clip(step?.content, 500), status: status[step?.status] ?? "pending" }));
 }
+
+/** Processes in `ps -o stat=` output that can still run: anything but a zombie (Z) waiting to be reaped. */
+export function liveProcesses(psStat) {
+  return psStat.split("\n").filter((stat) => stat.trim() && !stat.trim().startsWith("Z")).length;
+}

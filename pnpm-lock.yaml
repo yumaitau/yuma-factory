@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@opennextjs/cloudflare@1.20.6':
+    hash: e4679618195e96c4dfba3fcefc01b2938b2a64d31b32083702b17feb7db6c401
+    path: patches/@opennextjs__cloudflare@1.20.6.patch
+
 importers:
 
   .:
@@ -19,7 +24,7 @@ importers:
         version: 14.1.0
       '@opennextjs/cloudflare':
         specifier: ^1.14.8
-        version: 1.20.6(next@16.4.1(@babel/core@7.29.7)(@playwright/test@1.62.1)(@types/node@24.13.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(wrangler@4.130.0)
+        version: 1.20.6(patch_hash=e4679618195e96c4dfba3fcefc01b2938b2a64d31b32083702b17feb7db6c401)(next@16.4.1(@babel/core@7.29.7)(@playwright/test@1.62.1)(@types/node@24.13.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(wrangler@4.130.0)
       '@radix-ui/react-dialog':
         specifier: ^1.2.0
         version: 1.2.0(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -6885,7 +6890,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@opennextjs/cloudflare@1.20.6(next@16.4.1(@babel/core@7.29.7)(@playwright/test@1.62.1)(@types/node@24.13.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(wrangler@4.130.0)':
+  '@opennextjs/cloudflare@1.20.6(patch_hash=e4679618195e96c4dfba3fcefc01b2938b2a64d31b32083702b17feb7db6c401)(next@16.4.1(@babel/core@7.29.7)(@playwright/test@1.62.1)(@types/node@24.13.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(wrangler@4.130.0)':
     dependencies:
       '@ast-grep/napi': 0.40.5
       '@dotenvx/dotenvx': 1.31.0

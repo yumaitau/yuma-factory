@@ -23,7 +23,7 @@ test('runner failures that need a person are never retried; agent output failure
     'Codex changed GitHub Actions workflows or actions. Factory does not publish CI configuration.',
     "GitHub did not start CI jobs: the account's Actions billing or spending limit is blocking them.",
     'Follow-up PR has no CI to verify the main pipeline fix. PR left for review; ticket left open.',
-    'Main pipeline did not complete within 30 minutes. Check workflow triggers and pending checks before retrying.',
+    'Main pipeline did not complete within 2 hours. Check workflow triggers and pending checks before retrying.',
     'refusing to allow a GitHub App to create or update workflow x without `workflows` permission\nGitHub App Workflows write permission is required.',
   ]) assert.equal(failureKind(failed(log, { retryable: false }), 'implement'), 'human', log);
   assert.equal(failureKind(failed('Codex produced no file changes. See summary for details.', { retryable: false }), 'implement'), 'retry_once');

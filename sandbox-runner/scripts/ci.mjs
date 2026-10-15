@@ -248,8 +248,9 @@ export async function finishCommitCI({ snapshot, repair, done, progress, wait, n
       pendingSince ??= now();
       // Missing/blocked pipelines need operator attention, not an occupied
       // subscription forever. Never turn absent CI into successful completion.
-      if (now() - pendingSince >= 30 * 60_000) {
-        throw Object.assign(new Error("Main pipeline did not complete within 30 minutes. Check workflow triggers and pending checks before retrying. Ticket left open; subscription released."), { retryable: false });
+      // Same allowance as PR CI: main jobs queue behind PR jobs on the shared self-hosted runners.
+      if (now() - pendingSince >= PENDING_CI_MS) {
+        throw Object.assign(new Error("Main pipeline did not complete within 2 hours. Check workflow triggers and pending checks before retrying. Ticket left open; subscription released."), { retryable: false });
       }
       await progress(current.missing?.length
         ? `Waiting for the main pipeline: ${current.missing.join(", ")}. Ticket stays open.`

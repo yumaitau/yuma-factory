@@ -160,11 +160,11 @@ test('workflow permission rejection stops recovery and releases the subscription
 
 test('deployed recovery stops expired legacy main-CI waits without touching active coding', async () => {
   for (const [log, age, expired] of [
-    ['Waiting for the main pipeline. Ticket stays open.', 31 * 60_000, true],
-    ['Waiting for the main pipeline: deploy. Ticket stays open.', 31 * 60_000, true],
-    ['Waiting for the main pipeline. Ticket stays open.', 29 * 60_000, false],
-    ['Running tests', 31 * 60_000, false],
-    ['Waiting for the main pipeline. Ticket stays open.\nRepairing CI', 31 * 60_000, false],
+    ['Waiting for the main pipeline. Ticket stays open.', 121 * 60_000, true],
+    ['Waiting for the main pipeline: deploy. Ticket stays open.', 121 * 60_000, true],
+    ['Waiting for the main pipeline. Ticket stays open.', 119 * 60_000, false],
+    ['Running tests', 121 * 60_000, false],
+    ['Waiting for the main pipeline. Ticket stays open.\nRepairing CI', 121 * 60_000, false],
   ] as const) {
     const f = fixture(1);
     let stopped = 0;

@@ -128,9 +128,9 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
       // deduplicated main-CI progress message, never unrelated coding output.
       const lastProgress = state.progress?.log.trim().split('\n').at(-1) ?? '';
       if (state.running && !state.result && /^Waiting for the main pipeline[.:]/.test(lastProgress) &&
-        state.progress?.outputUpdatedAt && now - Date.parse(state.progress.outputUpdatedAt) >= 30 * 60_000) {
+        state.progress?.outputUpdatedAt && now - Date.parse(state.progress.outputUpdatedAt) >= 2 * 60 * 60_000) {
         state.result = { ...state.progress, status: 'failed', retryable: false,
-          log: `${state.progress.log}\nMain pipeline did not complete within 30 minutes. Check workflow triggers and pending checks before retrying. Ticket left open; subscription released.` };
+          log: `${state.progress.log}\nMain pipeline did not complete within 2 hours. Check workflow triggers and pending checks before retrying. Ticket left open; subscription released.` };
       }
       // Before a PR exists, the bridge always reports new output within Codex's time limit.
       // Silence past it means a wedged supervisor; restart it on a fresh sandbox.

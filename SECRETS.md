@@ -29,7 +29,7 @@ Next.js inlines these when you run `opennextjs-cloudflare build`. Set them in th
 | `GITHUB_APP_CLIENT_SECRET` | secret | GitHub App client secret |
 | `GITHUB_APP_SLUG` | secret | GitHub App URL slug |
 | `GITHUB_APP_WEBHOOK_SECRET` | secret | Same random value configured in the GitHub App webhook settings |
-| `FACTORY_API_KEY` | secret | Optional bearer key for `/api/v1` and `/api/mcp` |
+| `FACTORY_API_KEY` | secret | Optional shared bearer key for `/api/v1` and `/api/mcp`. It cannot act as a person; use personal keys from **API keys** for control tools |
 | `PAPERBOY_API_URL` | var | Optional. Origin of your [PaperBoy](https://github.com/yumaitau/paperboy) instance |
 | `PAPERBOY_API_KEY` | secret | Optional. PaperBoy API key |
 | `PAPERBOY_FROM` | var | Optional. Sender, e.g. `Factory <factory@example.com>` |

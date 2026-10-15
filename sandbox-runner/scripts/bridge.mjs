@@ -864,7 +864,7 @@ async function run() {
       };
       // The same checks on the base commit, run once per base and only when something fails. Root fetches the
       // base into a fresh repository, as it clones the checkout, so the agent's Git config and attributes can't
-      // shape it. The agent's user owns and empties it, with every agent process stopped first.
+      // shape it. With every agent process stopped, root removes it, as it removes the checkout in repairMain.
       let baseChecks;
       const UNCOMPARABLE = [{ name: "install", ok: false }];
       const baseResults = async () => {
@@ -872,10 +872,8 @@ async function run() {
         // Only root can add entries to the review directory, so this path is always one root made.
         const dir = `${reviewDir}/base`;
         const clear = async () => {
-          if (!(await fs.lstat(dir).catch(() => null))) return;
           await stopAgentProcesses();
-          await command("find", [dir, "-mindepth", "1", "-delete"], agentOptions);
-          await fs.rmdir(dir);
+          await fs.rm(dir, { recursive: true, force: true });
         };
         // A failed comparison leaves every failure to CI; agent processes that won't stop still fail the run.
         const stuck = (error) => /Agent processes would not stop/.test(error?.message ?? "");
@@ -886,6 +884,8 @@ async function run() {
           await command("git", ["init", "-q", dir]);
           await command("git", ["-C", dir, "fetch", "-q", "--depth", "1", `https://github.com/${req.repoFullName}.git`, baseHead], { env: credentialEnv });
           await command("git", ["-C", dir, "-c", "core.hooksPath=/dev/null", "checkout", "-q", "--force", "--detach", "FETCH_HEAD"]);
+          // No agent process may change the base before its checks run.
+          await stopAgentProcesses();
           await command("chown", ["-R", "-h", "10001:10001", dir]);
           // A base without checks Factory can run can't be compared: a change that adds a lockfile isn't blamed for old errors.
           results = await runChecks(dir, { label: "Base commit: " }) ?? UNCOMPARABLE;

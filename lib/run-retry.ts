@@ -23,8 +23,9 @@ export const RETRY_BUDGET: Record<FailureKind, number> = { retry: MAX_AUTO_RETRI
 
 // Bad planner output is model output, and a plan run never publishes, so a retry is safe.
 const PLANNER_OUTPUT = /Planner did not write a valid plan file|Planner returned an invalid proposal/;
-// Rerunning rarely changes these, often because the work already landed. One fresh look, no more.
-const NOTHING_PRODUCED = /produced no file changes|CI still failing after \d+ repairs that changed nothing/;
+// Rerunning rarely changes this, often because the work already landed. One fresh look, no more.
+// CI that three repairs could not move is left to a person: a fresh attempt repeats the same repairs.
+const NOTHING_PRODUCED = /produced no file changes/;
 // A re-check costs no agent work: the run resumes the PR branch and only reads CI.
 const GITHUB_BLOCKED = /GitHub did not run CI jobs/;
 

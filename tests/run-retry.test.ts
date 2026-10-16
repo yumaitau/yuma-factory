@@ -27,7 +27,7 @@ test('runner failures that need a person are never retried; agent output failure
     'refusing to allow a GitHub App to create or update workflow x without `workflows` permission\nGitHub App Workflows write permission is required.',
   ]) assert.equal(failureKind(failed(log, { retryable: false }), 'implement'), 'human', log);
   assert.equal(failureKind(failed('Codex produced no file changes. See summary for details.', { retryable: false }), 'implement'), 'retry_once');
-  assert.equal(failureKind(failed('CI still failing after 3 repairs that changed nothing. PR left open for review; ticket left open.', { retryable: false }), 'implement'), 'retry_once');
+  assert.equal(failureKind(failed('CI still failing after 3 repairs that changed nothing. PR left open for review; ticket left open.', { retryable: false }), 'implement'), 'human');
   assert.equal(failureKind(failed('Planner did not write a valid plan file.', { retryable: false }), 'plan'), 'retry');
   assert.equal(failureKind(failed('ok\nPlanner returned an invalid proposal: too many tasks. Move the ticket to intake to retry.', { retryable: false }), 'plan'), 'retry');
   // Legacy failures the runner did not classify keep the full budget.

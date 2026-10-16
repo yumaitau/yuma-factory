@@ -14,6 +14,7 @@ import { LABELS } from '@/lib/brand';
 import { approvalHistory, staleApproval } from '@/lib/approval';
 import { syncPullRequests } from '@/lib/pull-request-sync';
 import { retryFrom } from '@/lib/run-retry';
+import { openBlockers } from '@/lib/issue-dependencies';
 
 /** One durable lease covers cron and manual checks. Interrupted checks can resume after expiry. */
 export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' = 'pickup') {
@@ -154,6 +155,8 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
             // Fail closed: text changed by anyone but the approver needs a fresh label.
             const stale = staleApproval(await approvalHistory(client.graphql, owner, repo, ticket.githubIssueNumber), [settings.label, LABELS.plan]);
             if (stale) throw new Error(`${project.repoFullName}#${ticket.githubIssueNumber}: ${stale}`);
+            // Work built on unmerged issues only fails review; the board shows the wait instead.
+            if ((await openBlockers(db, client, owner, repo, ticket, data)).length) return false;
             await startCodexRun(ticket.id, agent.id, agent.modelId ?? 'codex-default', settings.userId,
               { automationLabel: settings.label, automationLeaseId: leaseId }, undefined, retryOf ? retryFrom(retryOf) : undefined);
             runsStarted++;

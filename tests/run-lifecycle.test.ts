@@ -79,6 +79,20 @@ test('same-second requeue clears a failed attempt and the replacement run remain
   } finally { sqlite.close(); }
 });
 
+test('any idle pool worker takes a ticket held by a busy pool worker, but manual assignments stay pinned', async () => {
+  for (const [slot, expected] of [[2, true], [null, false]] as const) {
+    const { db, sqlite } = lifecycleDatabase();
+    try {
+      await reserve(db);
+      await db.insert(schema.automation).values({ id: 'github', enabled: true, userId: 'user', agentId: 'worker', leaseId: 'lease', leaseUntil: new Date(Date.now() + 60_000), updatedAt: new Date() });
+      sqlite.exec(`UPDATE agents SET automation_slot=1 WHERE id='worker'; UPDATE agents SET status='working', automation_slot=${slot ?? 'null'} WHERE id='other';
+        UPDATE tickets SET assigned_agent_id='other' WHERE id='ticket'`);
+      assert.equal(await claimRun(db, input, options), expected, `held by slot ${slot}`);
+      assert.equal(sqlite.prepare("SELECT assigned_agent_id AS id FROM tickets WHERE id='ticket'").get()?.id, expected ? 'worker' : 'other');
+    } finally { sqlite.close(); }
+  }
+});
+
 test('manual stage moves cannot invent running work or move a live run', async () => {
   const { db, sqlite } = lifecycleDatabase();
   try {

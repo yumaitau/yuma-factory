@@ -43,7 +43,9 @@ export async function claimRun(db: Db, input: {
     sql`not exists (select 1 from ticket_dependencies d join tickets blocker on blocker.id = d.depends_on_ticket_id where d.ticket_id = ${ticketId} and blocker.github_state = 'open')`,
     ...(options ? [
       sql`${tickets.stage} in ('intake', 'assigned')`,
-      sql`(${tickets.assignedAgentId} is null or ${tickets.assignedAgentId} = ${agentId})`,
+      // Any pool worker may take a ticket another pool worker held; a manual assignment stays pinned.
+      sql`(${tickets.assignedAgentId} is null or ${tickets.assignedAgentId} = ${agentId}
+        or exists (select 1 from agents held where held.id = ${tickets.assignedAgentId} and held.automation_slot is not null))`,
       // A fresh attempt needs no runs since the requeue; a retry needs its failed parent to be the latest, and due.
       attempt > 1 && parentRunId
         ? sql`exists (select 1 from runs where runs.id = ${parentRunId} and runs.ticket_id = ${ticketId} and runs.attempt = ${attempt - 1}

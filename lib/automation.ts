@@ -133,7 +133,9 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
       const dispatchErrors: string[] = [];
       await db.update(automation).set({ reposSynced, issuesSynced, updatedAt: new Date(),
         summary: `Checking up to ${candidates.length} tickets for available agents.` }).where(held());
-      await dispatchAssignments(candidates.map((row) => row.ticket), idle, capacity, 4, async (ticket, agent) => {
+      // Candidates are unassigned or held by a pool worker. Pool workers are interchangeable, so a
+      // requeued ticket still held by a busy worker must not wait while other workers sit idle.
+      await dispatchAssignments(candidates.map((row) => ({ ...row.ticket, assignedAgentId: null })), idle, capacity, 4, async (ticket, agent) => {
           if (Date.now() > deadline || !(await stillEnabled())) return false;
           const { project, retryOf } = candidates.find((candidate) => candidate.ticket.id === ticket.id)!;
           const installation = boards.find((board) => board.project.id === project.id)?.installation;

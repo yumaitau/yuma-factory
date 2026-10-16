@@ -1,0 +1,33 @@
+diff --git a/dist/cli/build/patches/plugins/module-loading.js b/dist/cli/build/patches/plugins/module-loading.js
+index d72a3f4c99b6b6dcf087262f9f0433b8c58fa436..96a4de30f9b855df4365b93ccf7b1a417e95ead1 100644
+--- a/dist/cli/build/patches/plugins/module-loading.js
++++ b/dist/cli/build/patches/plugins/module-loading.js
+@@ -4,6 +4,9 @@
+  * Next.js shares one timer-backed CacheSignal across all requests. Workers cannot
+  * cancel or notify those timers from a different request's I/O context, so store
+  * the signal on the OpenNext request store and use a fallback outside a request.
++ *
++ * Next.js 16.4 constructs the signal as `new CacheSignal(null)`, so the pattern
++ * accepts any constructor arguments and passes them through (opennextjs-cloudflare#1318).
+  */
+ import { patchCode } from "@opennextjs/aws/build/patch/astCodePatcher.js";
+ import { getCrossPlatformPathRegex } from "@opennextjs/aws/utils/regex.js";
+@@ -17,15 +20,15 @@ rule:
+       field: name
+       regex: ^getModuleLoadingSignal$
+   has:
+-    pattern: $SIGNAL = new $CACHE_SIGNAL.CacheSignal()
++    pattern: $SIGNAL = new $CACHE_SIGNAL.CacheSignal($$$ARGS)
+     stopBy: end
+ fix: |-
+   {
+     const requestStore = globalThis.__openNextAls?.getStore();
+     if (requestStore) {
+-      return requestStore.moduleLoadingSignal ??= new $CACHE_SIGNAL.CacheSignal();
++      return requestStore.moduleLoadingSignal ??= new $CACHE_SIGNAL.CacheSignal($$$ARGS);
+     }
+-    return $SIGNAL ??= new $CACHE_SIGNAL.CacheSignal();
++    return $SIGNAL ??= new $CACHE_SIGNAL.CacheSignal($$$ARGS);
+   }
+ `;
+ export const patchModuleLoadingSignal = {

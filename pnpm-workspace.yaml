@@ -1,3 +1,5 @@
 dangerouslyAllowAllBuilds: true
+overrides:
+  glob@10.3.3: 10.5.0
 patchedDependencies:
   '@opennextjs/cloudflare@1.20.11': patches/@opennextjs__cloudflare@1.20.11.patch

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_REVIEW_FIXES, isBlocking, isDependencyBump, issueNumbers, parseFindings, reviewPrompt, reviewUntilClean } from "../sandbox-runner/scripts/review.mjs";
+import { MAX_REVIEW_FIXES, isBlocking, isDependencyBump, issueNumbers, parseFindings, repairTask, reviewPrompt, reviewUntilClean } from "../sandbox-runner/scripts/review.mjs";
 
 const diff = (path, ...lines) => `diff --git a/${path} b/${path}\nindex 1..2 100644\n--- a/${path}\n+++ b/${path}\n@@ -1,3 +1,3 @@\n ${"context"}\n${lines.join("\n")}\n`;
 
@@ -123,4 +123,13 @@ test("work waiting on other issues is not a defect to fix, and stops the fix loo
   const dropped = await reviewUntilClean({ progress: async () => {}, review: async () => rounds.shift(), fix: async () => "" });
   assert.deepEqual(dropped, { verdict: "blocked", findings: [], waits: [blocked] });
   assert.match(reviewPrompt({ task: "t", diffFile: "d" }), /blockedBy .* only on a medium finding/);
+});
+
+test("a CI repair's review sees the repair, so fixes to older failures are not reverted as out of scope", () => {
+  const task = repairTask("Bump next to 16.4.1", ["Trivy dependency vulnerabilities", "verify"]);
+  assert.match(task, /^Bump next to 16\.4\.1/);
+  assert.match(task, /\(Trivy dependency vulnerabilities, verify\)/);
+  assert.match(task, /predate the ticket.*is in scope/);
+  assert.match(reviewPrompt({ task, diffFile: "d" }), /repairs CI that failed/);
+  assert.doesNotMatch(repairTask("t", []), /\(\)/);
 });

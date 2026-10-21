@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    # GitHub-hosted only: self-hosted runners would execute fork pull requests on org machines.
-    runs-on: ubuntu-latest
+    # Self-hosted, except fork pull requests: this repository is public, and those must not run on org machines.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "linux", "X64"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     env:
       NEXT_TELEMETRY_DISABLED: '1'
@@ -112,7 +112,8 @@ jobs:
         PREVIOUS_VERSION: ${{ steps.previous.outputs.version }}
       run: pnpm exec wrangler rollback "$PREVIOUS_VERSION" --name yuma-factory --message "Automatic rollback of ${GITHUB_SHA:0:7} after a failed smoke test" -y
   sandbox:
-    runs-on: ubuntu-latest
+    # Same rule as deploy.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "linux", "X64"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     env:
       NEXT_TELEMETRY_DISABLED: '1'

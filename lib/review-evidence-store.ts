@@ -68,9 +68,8 @@ export async function observePullHead(db: Db, pullRequestUrl: string, sha: strin
 export async function syncHeadEvidence(db: Db, client: Client, input: { runId: string; ticketId: string; owner: string; repo: string; headSha: string; baseBranch?: string; updatedAt?: string }) {
   await observeHead(db, input.runId, input.headSha);
   // An unreadable check list keeps the stored records; the gate still judges them against the new head.
-  // Changed or unreadable checks/policy invalidate an earlier no-CI observation.
-  await db.delete(runEvidence).where(and(eq(runEvidence.runId, input.runId), eq(runEvidence.sourceSha, input.headSha),
-    eq(runEvidence.kind, 'note'), eq(runEvidence.name, NO_CI_NOTE)));
+  // Keep a prior observation visible while refreshing. Invalidate it if the fresh probe cannot confirm it.
+  let noCI = false;
   await readCheckEvidence(client, input.owner, input.repo, input.headSha).then(async (records) => {
     await recordEvidence(db, { id: input.runId, ticketId: input.ticketId }, records);
     if (records.length || !input.baseBranch) return;
@@ -102,10 +101,13 @@ export async function syncHeadEvidence(db: Db, client: Client, input: { runId: s
         }
       }, input.baseBranch);
     if (required.length) return;
+    noCI = true;
     await recordEvidence(db, { id: input.runId, ticketId: input.ticketId }, [{ kind: 'note', name: NO_CI_NOTE,
       sourceSha: input.headSha, environment: 'github', startedAt: null, finishedAt: new Date().toISOString(),
       result: 'skipped', url: null, logKey: null }]);
-  }).catch(() => {});
+  }).catch(() => { noCI = false; });
+  if (!noCI) await db.delete(runEvidence).where(and(eq(runEvidence.runId, input.runId), eq(runEvidence.sourceSha, input.headSha),
+    eq(runEvidence.kind, 'note'), eq(runEvidence.name, NO_CI_NOTE)));
   return runEvidenceGate(db, input.runId, input.headSha);
 }
 

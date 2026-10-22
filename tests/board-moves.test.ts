@@ -51,3 +51,15 @@ test('project board stage moves mirror the server guards', () => {
   assert.match(stageMoveError('in_progress', 'review')!, /Stop the active run/);
   assert.ok(stageMoveError('review', 'review'));
 });
+
+
+test('finished attempts blocked on evidence can be moved to preparation without retaining their old lane', () => {
+  const evidence = { state: 'pending' as const, headSha: 'a'.repeat(40), reason: 'Runner offline', current: [], stale: [] };
+  for (const state of ['pending', 'failed'] as const) {
+    const blocked = { ...card, stage: 'review', runStatus: 'succeeded', runId: 'run',
+      pullRequestUrl: 'https://github.com/org/repo/pull/2', evidence: { ...evidence, state } };
+    assert.equal(workDragBlocked(blocked), null);
+    assert.deepEqual(workMove(blocked, 'intake'), { requeue: true, ready: false });
+    assert.equal(workLane(movedCard(blocked, 'intake')), 'intake');
+  }
+});

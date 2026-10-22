@@ -76,7 +76,7 @@ export async function moveTicket(db: Db, ticketId: string, stage: TicketStage, r
   if (stage === 'in_progress') throw new Error('Start a run to move this ticket into progress.');
   // Strictly exceed the failed attempt, even when retrying within its creation second.
   const requeuedAt = sql`case when (select status from runs where ticket_id = ${ticketId} order by created_at desc, id desc limit 1)
-    in ('failed', 'cancelled') then max(${Math.floor(now.getTime() / 1000)},
+    in ('failed', 'cancelled', 'succeeded') then max(${Math.floor(now.getTime() / 1000)},
       (select max(created_at) + 1 from runs where ticket_id = ${ticketId})) else ${tickets.requeuedAt} end`;
   const changed = await db.update(tickets).set({ stage, updatedAt: now, ...(requeue ? { requeuedAt } : {}) })
     .where(and(eq(tickets.id, ticketId), sql`not exists (select 1 from runs where ticket_id = ${ticketId} and status = 'running')`))

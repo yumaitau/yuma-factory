@@ -43,7 +43,7 @@ export async function outstandingPullRequests(): Promise<ReviewQueue> {
       // Each row shows the checks GitHub reports for the PR's current head, and older records as stale.
       await forEachConcurrent(matched, 4, async (pr) => {
         if (pr.headSha && pr.ticketId) pr.evidence = await syncHeadEvidence(db, client,
-          { runId: pr.runId, ticketId: pr.ticketId, owner, repo, headSha: pr.headSha }).catch(() => null);
+          { runId: pr.runId, ticketId: pr.ticketId, owner, repo, headSha: pr.headSha, baseBranch: pr.baseBranch }).catch(() => null);
       });
       queue.pulls.push(...matched);
     } catch { queue.unavailableRepos.push(fullName); }

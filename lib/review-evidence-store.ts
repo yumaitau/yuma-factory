@@ -1,8 +1,9 @@
 import 'server-only';
 import { and, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import { reviewAcceptances, runEvidence, runs } from '@/db/schema';
+import { loadRequiredChecks } from '@/sandbox-runner/scripts/ci.mjs';
 import { newId } from '@/lib/ids';
-import { checkEvidence, evidenceGate, type Evidence, type EvidenceGate } from '@/lib/review-evidence';
+import { checkEvidence, evidenceGate, NO_CI_NOTE, type Evidence, type EvidenceGate } from '@/lib/review-evidence';
 import type { Db } from '@/lib/queries';
 import type { getGithubApp } from '@/lib/github';
 
@@ -64,11 +65,41 @@ export async function observePullHead(db: Db, pullRequestUrl: string, sha: strin
 }
 
 /** Observe the head, record its checks, and return the gate over everything the run has recorded. */
-export async function syncHeadEvidence(db: Db, client: Client, input: { runId: string; ticketId: string; owner: string; repo: string; headSha: string }) {
+export async function syncHeadEvidence(db: Db, client: Client, input: { runId: string; ticketId: string; owner: string; repo: string; headSha: string; baseBranch?: string }) {
   await observeHead(db, input.runId, input.headSha);
   // An unreadable check list keeps the stored records; the gate still judges them against the new head.
-  await readCheckEvidence(client, input.owner, input.repo, input.headSha)
-    .then((records) => recordEvidence(db, { id: input.runId, ticketId: input.ticketId }, records)).catch(() => {});
+  // Changed or unreadable checks/policy invalidate an earlier no-CI observation.
+  await db.delete(runEvidence).where(and(eq(runEvidence.runId, input.runId), eq(runEvidence.sourceSha, input.headSha),
+    eq(runEvidence.kind, 'note'), eq(runEvidence.name, NO_CI_NOTE)));
+  await readCheckEvidence(client, input.owner, input.repo, input.headSha).then(async (records) => {
+    await recordEvidence(db, { id: input.runId, ticketId: input.ticketId }, records);
+    if (records.length || !input.baseBranch) return;
+    const params = { owner: input.owner, repo: input.repo, request: { signal: AbortSignal.timeout(15_000) } };
+    const { data: workflows } = await client.request('GET /repos/{owner}/{repo}/actions/workflows', { ...params, per_page: 1 });
+    if (workflows.total_count !== 0) return;
+    const github = async (path: string) => {
+      try { return (await client.request(`GET /repos/{owner}/{repo}${path}`, params)).data; }
+      catch (error) {
+        if (error && typeof error === 'object' && 'response' in error)
+          Object.assign(error, { apiMessage: (error.response as { data?: { message?: string } })?.data?.message });
+        throw error;
+      }
+    };
+    const required = await loadRequiredChecks(github,
+      async (path: string) => {
+        const rules: unknown[] = [];
+        for (let page = 1; ; page++) {
+          const { data } = await client.request(`GET /repos/{owner}/{repo}${path}`, { ...params, per_page: 100, page });
+          if (!Array.isArray(data)) throw new Error('Invalid branch rules response');
+          rules.push(...data);
+          if (data.length < 100) return rules;
+        }
+      }, input.baseBranch);
+    if (required.length) return;
+    await recordEvidence(db, { id: input.runId, ticketId: input.ticketId }, [{ kind: 'note', name: NO_CI_NOTE,
+      sourceSha: input.headSha, environment: 'github', startedAt: null, finishedAt: new Date().toISOString(),
+      result: 'skipped', url: null, logKey: null }]);
+  }).catch(() => {});
   return runEvidenceGate(db, input.runId, input.headSha);
 }
 

@@ -273,6 +273,7 @@ test("a repository without any CI keeps a declined PR for review", async () => {
   });
   assert.equal(result, null);
   assert.equal(calls, 1);
+  assert.equal(time, 5 * 60_000);
 });
 
 test("CI stuck pending for 2 hours leaves the PR for review", async () => {

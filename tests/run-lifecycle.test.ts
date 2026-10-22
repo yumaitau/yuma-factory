@@ -168,3 +168,17 @@ test('bounded candidate scans rotate rejected tickets independently of repositor
     assert.notEqual(next, first);
   } finally { sqlite.close(); }
 });
+
+
+test('preparing a completed attempt hides its stale board evidence and keeps run history', async () => {
+  const { db, sqlite } = lifecycleDatabase();
+  try {
+    const now = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await db.insert(schema.runs).values({ id: 'old', ticketId: 'ticket', agentId: 'worker', modelId: 'codex-default', status: 'succeeded', createdAt: now });
+    await moveTicket(db, 'ticket', 'intake', true, now);
+    const ticket = await db.select().from(schema.tickets).where(eq(schema.tickets.id, 'ticket')).get();
+    assert.equal(ticket?.stage, 'intake');
+    assert.equal(ticket?.requeuedAt?.getTime(), now.getTime() + 1000);
+    assert.equal(sqlite.prepare('SELECT count(*) AS n FROM runs').get()?.n, 1);
+  } finally { sqlite.close(); }
+});

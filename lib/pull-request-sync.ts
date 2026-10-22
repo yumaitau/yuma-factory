@@ -35,7 +35,7 @@ export async function syncPullRequests(db: Db, clientFor: (installationId: numbe
       });
       const state = pull.merged ? 'merged' : pull.state === 'closed' ? 'closed' : 'open';
       if (state === 'open' && pull.head?.sha)
-        await syncHeadEvidence(db, client, { runId: run.id, ticketId: ticket.id, owner, repo: name, headSha: pull.head.sha });
+        await syncHeadEvidence(db, client, { runId: run.id, ticketId: ticket.id, owner, repo: name, headSha: pull.head.sha, baseBranch: pull.base?.ref });
       if (state === 'merged') {
         const labels = await markGithubIssueDone(client, owner, name, ticket.githubIssueNumber);
         await db.update(tickets).set({ stage: 'done', githubState: 'closed', labels: JSON.stringify(labels), updatedAt: new Date() })

@@ -114,10 +114,14 @@ test('CI absence is recorded only after workflow and branch policies are readabl
     let required = false;
     let unavailable = false;
     let active = 0;
+    let whileRefreshing: (() => Promise<void>) | undefined;
     const client = { request: async (route: string) => {
       if (route.includes('/check-runs')) return { data: { check_runs: [] } };
       if (route.endsWith('/status')) return { data: { statuses: [] } };
-      if (route.endsWith('/actions/workflows')) return { data: { total_count: workflows } };
+      if (route.endsWith('/actions/workflows')) {
+        await whileRefreshing?.();
+        return { data: { total_count: workflows } };
+      }
       if (route.endsWith('/actions/runs')) return { data: { total_count: active } };
       if (route.endsWith('/protection')) {
         if (unavailable) throw Object.assign(new Error('Denied'), { status: 403 });
@@ -128,6 +132,9 @@ test('CI absence is recorded only after workflow and branch policies are readabl
     } } as never;
     const input = { runId: 'run', ticketId: 'ticket', owner: 'org', repo: 'repo', headSha: A, baseBranch: 'main' };
     assert.equal((await syncHeadEvidence(db, client, input)).state, 'no_ci');
+    whileRefreshing = async () => { assert.equal((await runEvidenceGate(db, 'run', A)).state, 'no_ci'); };
+    assert.equal((await syncHeadEvidence(db, client, input)).state, 'no_ci');
+    whileRefreshing = undefined;
     required = true;
     assert.equal((await syncHeadEvidence(db, client, input)).state, 'missing');
     required = false;

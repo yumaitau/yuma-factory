@@ -73,7 +73,7 @@ export function deliveryState(card: WorkCard): { id: string; label: string } {
 
 /**
  * A finished implementation with an open pull request claims Ready for review only with passing
- * checks on its current head. The log saying success is not evidence. Null when no gate applies.
+ * checks on its current head or a confirmed no-CI policy. Null when no gate applies.
  */
 export function reviewEvidence(card: WorkCard): EvidenceGate | null {
   if (card.runStatus !== 'succeeded' || card.runMode === 'plan' || !card.pullRequestUrl || card.pullRequestState === 'merged') return null;
@@ -87,7 +87,7 @@ export function workLane(card: WorkCard) {
   if (card.runStatus === 'failed') return scheduledRetry(card) ? 'queued' : 'attention';
   if (card.stage === 'review' || card.runStatus === 'succeeded') {
     const gate = reviewEvidence(card);
-    if (!gate || gate.state === 'ready') return 'review';
+    if (!gate || gate.state === 'ready' || gate.state === 'no_ci') return 'review';
     return gate.state === 'pending' || gate.state === 'unchecked' ? 'waiting' : 'attention';
   }
   // Stopped attempts require a manual decision, just like automationCandidates.
@@ -105,6 +105,7 @@ export function riskLabel(labels: string[]) {
 
 /** CI or validation, when the run says anything about it. */
 export function ciLabel(card: WorkCard) {
+  if (card.evidence?.state === 'no_ci') return 'No CI';
   if (card.completionPending) return 'CI green';
   if (workLane(card) === 'running' && card.pullRequestUrl) return 'CI running';
   if (card.runOutcome?.startsWith('No CI registered')) return 'No CI';
@@ -130,6 +131,7 @@ export function workReason(card: WorkCard) {
     if (attempts > 1) return `Failed after ${attempts} attempts: ${card.runOutcome ?? 'review the output, then move it to Needs preparation to retry.'}`;
     return card.runOutcome ? `Run failed: ${card.runOutcome}` : 'Previous run failed. Review the output, then move it to Needs preparation to retry.';
   }
+  if (lane === 'review' && gate?.state === 'no_ci') return gate.reason;
   if (lane === 'review' && card.runOutcome?.startsWith('No CI registered')) return 'No CI on this repository, so Factory did not merge. Review the pull request yourself. Reviewing it does not deploy.';
   if (lane === 'review' && card.runMode === 'plan') return 'Plan proposed. Approve it on the Plans page to create subtasks. That approval does not merge or deploy.';
   const passed = gate ? ` ${gate.reason}` : '';

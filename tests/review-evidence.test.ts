@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkEvidence, evidenceGate } from '../lib/review-evidence';
+import { checkEvidence, evidenceGate, NO_CI_NOTE } from '../lib/review-evidence';
 import { runEvidenceGate, syncHeadEvidence } from '../lib/review-evidence-store';
 import { syncPullRequests } from '../lib/pull-request-sync';
 import { workLane, workReason, type WorkCard } from '../lib/work-board';
@@ -89,5 +89,62 @@ test('stored evidence follows the PR head: a matching SHA, a drifted SHA, and a 
     assert.equal(fresh.state, 'ready');
     assert.equal(fresh.current[0].sourceSha, B);
     assert.equal(fresh.stale[0].sourceSha, A);
+  } finally { sqlite.close(); }
+});
+
+
+test('confirmed absence of CI permits review without claiming green checks; new heads and real checks override it', () => {
+  const note = { kind: 'note' as const, name: NO_CI_NOTE, sourceSha: A, environment: 'github', startedAt: null,
+    finishedAt: null, result: 'skipped' as const, url: null, logKey: null };
+  const noCI = evidenceGate([note], A);
+  assert.equal(noCI.state, 'no_ci');
+  assert.equal(workLane({ ...card, evidence: noCI }), 'review');
+  assert.match(workReason({ ...card, evidence: noCI }), /without automated checks/);
+  assert.equal(evidenceGate([note], B).state, 'missing');
+  assert.equal(evidenceGate([note, ...checkEvidence(A, [{ ...green, conclusion: 'failure' }], [])], A).state, 'failed');
+  assert.equal(evidenceGate([note, ...checkEvidence(A, [{ ...green, status: 'queued', conclusion: null }], [])], A).state, 'pending');
+});
+
+test('CI absence is recorded only after workflow and branch policies are readable and empty', async () => {
+  const { db, sqlite } = lifecycleDatabase();
+  try {
+    sqlite.exec(`INSERT INTO runs (id, ticket_id, agent_id, status, model_id, pull_request_url, created_at)
+      VALUES ('run', 'ticket', 'worker', 'succeeded', 'm', 'https://github.com/org/repo/pull/10', 1)`);
+    let workflows = 0;
+    let required = false;
+    let unavailable = false;
+    let active = 0;
+    const client = { request: async (route: string) => {
+      if (route.includes('/check-runs')) return { data: { check_runs: [] } };
+      if (route.endsWith('/status')) return { data: { statuses: [] } };
+      if (route.endsWith('/actions/workflows')) return { data: { total_count: workflows } };
+      if (route.endsWith('/actions/runs')) return { data: { total_count: active } };
+      if (route.endsWith('/protection')) {
+        if (unavailable) throw Object.assign(new Error('Denied'), { status: 403 });
+        return { data: { required_status_checks: { contexts: required ? ['test'] : [] } } };
+      }
+      if (route.includes('/rules/branches/')) return { data: [] };
+      return { data: {} };
+    } } as never;
+    const input = { runId: 'run', ticketId: 'ticket', owner: 'org', repo: 'repo', headSha: A, baseBranch: 'main' };
+    assert.equal((await syncHeadEvidence(db, client, input)).state, 'no_ci');
+    required = true;
+    assert.equal((await syncHeadEvidence(db, client, input)).state, 'missing');
+    required = false;
+    assert.equal((await syncHeadEvidence(db, client, input)).state, 'no_ci');
+    unavailable = true;
+    assert.equal((await syncHeadEvidence(db, client, input)).state, 'missing');
+    unavailable = false;
+    workflows = 1;
+    assert.equal((await syncHeadEvidence(db, client, input)).state, 'missing');
+    const expired = { ...input, updatedAt: new Date(Date.now() - 31 * 60_000).toISOString() };
+    assert.equal((await syncHeadEvidence(db, client, expired)).state, 'no_ci');
+    active = 1;
+    assert.equal((await syncHeadEvidence(db, client, expired)).state, 'missing');
+    active = 0;
+    required = true;
+    assert.equal((await syncHeadEvidence(db, client, expired)).state, 'missing');
+    required = false;
+    assert.equal((await syncHeadEvidence(db, client, { ...expired, updatedAt: new Date().toISOString() })).state, 'missing');
   } finally { sqlite.close(); }
 });

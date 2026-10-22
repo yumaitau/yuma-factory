@@ -6,7 +6,7 @@ const RESULT_TONE: Record<EvidenceResult, string> = {
   passed: 'text-status-done', failed: 'text-status-attention', skipped: 'text-muted-foreground', unknown: 'text-status-running',
 };
 const RESULT_LABEL: Record<EvidenceResult, string> = { passed: 'Passed', failed: 'Failed', skipped: 'Skipped', unknown: 'Pending' };
-const GATE_TONE = { ready: 'text-status-done', pending: 'text-status-running', unchecked: 'text-muted-foreground', failed: 'text-status-attention', missing: 'text-status-attention' };
+const GATE_TONE = { no_ci: 'text-muted-foreground', ready: 'text-status-done', pending: 'text-status-running', unchecked: 'text-muted-foreground', failed: 'text-status-attention', missing: 'text-status-attention' };
 
 function Row({ record, stale }: { record: Evidence; stale?: boolean }) {
   const at = record.finishedAt ?? record.startedAt;

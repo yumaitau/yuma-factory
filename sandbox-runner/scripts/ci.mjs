@@ -160,7 +160,6 @@ export async function finishWithGreenCI({ snapshot, repair, closeIssue, closeWit
   let greenHead = null;
   let emptySince = null;
   let idleRepairs = 0;
-  let keepForReview = false;
   let pendingSince = null;
   for (;;) {
     const current = await snapshot();
@@ -173,10 +172,11 @@ export async function finishWithGreenCI({ snapshot, repair, closeIssue, closeWit
     } else pendingSince = null;
     if (current.empty) {
       emptySince ??= now();
-      if (current.noCI && closeWithoutCI && !keepForReview && !current.blocked && !current.closed &&
+      if (current.noCI && closeWithoutCI && !current.blocked && !current.closed &&
         now() - emptySince >= NO_CI_REPO_MS) {
         if (await closeWithoutCI(current.sha)) return current.sha;
-        keepForReview = true;
+        await progress("No CI configured in this repository. PR ready for review; subscription released.");
+        return null;
       }
       if (now() - emptySince >= NO_PR_CI_MS) {
         await progress("No CI registered on the PR within 30 minutes. Only review bots, if any, reported. PR left open for review; subscription released.");

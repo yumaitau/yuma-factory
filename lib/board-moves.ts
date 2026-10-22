@@ -12,7 +12,7 @@ export type WorkMove = { error: string } | { requeue: boolean; ready?: boolean }
 /** Why a card cannot be dragged at all, or null when it can. */
 export function workDragBlocked(card: WorkCard): string | null {
   const from = workLane(card);
-  if (from === 'running' || from === 'waiting') return 'Stop the active run on Work before moving this task.';
+  if (card.runStatus === 'running' || card.stage === 'in_progress') return 'Stop the active run on Work before moving this task.';
   if (from === 'review') return 'This run finished. Review its pull request instead of running it again.';
   if (from === 'done') return 'Integrated tasks stay closed. Reopen the issue on GitHub to work on it again.';
   return null;
@@ -29,7 +29,7 @@ export function workMove(card: WorkCard, target: string): WorkMove {
   if (target !== 'intake' && target !== 'queued') return { error: 'Unknown lane.' };
   if (target === 'queued' && card.assignedAgentId && !card.automationSlot)
     return { error: 'Assigned to an agent that automation does not use. Unassign it on the project board first.' };
-  const requeue = card.runStatus === 'failed' || card.runStatus === 'cancelled';
+  const requeue = ['failed', 'cancelled', 'succeeded'].includes(card.runStatus ?? '');
   const ready = target === 'queued';
   return hasReady(card.labels) === ready ? { requeue } : { requeue, ready };
 }

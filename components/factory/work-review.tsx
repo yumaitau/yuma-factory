@@ -11,7 +11,7 @@ function reviewStatus(pr: ReviewPullRequest) {
   if (pr.draft) return 'Draft';
   if (pr.running) return 'Agent still working';
   if (!pr.evidence) return 'Evidence unavailable. Not described as ready for review';
-  return pr.evidence.state === 'ready' ? 'Ready for your review' : 'Not ready for review';
+  return (pr.evidence.state === 'ready' || pr.evidence.state === 'no_ci') ? 'Ready for your review' : 'Not ready for review';
 }
 
 export function WorkReview({ completed }: { completed: CompletedWork[] }) {

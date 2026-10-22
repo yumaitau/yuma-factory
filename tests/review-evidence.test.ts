@@ -113,10 +113,12 @@ test('CI absence is recorded only after workflow and branch policies are readabl
     let workflows = 0;
     let required = false;
     let unavailable = false;
+    let active = 0;
     const client = { request: async (route: string) => {
       if (route.includes('/check-runs')) return { data: { check_runs: [] } };
       if (route.endsWith('/status')) return { data: { statuses: [] } };
       if (route.endsWith('/actions/workflows')) return { data: { total_count: workflows } };
+      if (route.endsWith('/actions/runs')) return { data: { total_count: active } };
       if (route.endsWith('/protection')) {
         if (unavailable) throw Object.assign(new Error('Denied'), { status: 403 });
         return { data: { required_status_checks: { contexts: required ? ['test'] : [] } } };
@@ -135,5 +137,14 @@ test('CI absence is recorded only after workflow and branch policies are readabl
     unavailable = false;
     workflows = 1;
     assert.equal((await syncHeadEvidence(db, client, input)).state, 'missing');
+    const expired = { ...input, updatedAt: new Date(Date.now() - 31 * 60_000).toISOString() };
+    assert.equal((await syncHeadEvidence(db, client, expired)).state, 'no_ci');
+    active = 1;
+    assert.equal((await syncHeadEvidence(db, client, expired)).state, 'missing');
+    active = 0;
+    required = true;
+    assert.equal((await syncHeadEvidence(db, client, expired)).state, 'missing');
+    required = false;
+    assert.equal((await syncHeadEvidence(db, client, { ...expired, updatedAt: new Date().toISOString() })).state, 'missing');
   } finally { sqlite.close(); }
 });

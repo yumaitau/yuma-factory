@@ -7,8 +7,8 @@ export type Evidence = {
   kind: EvidenceKind; name: string; sourceSha: string; environment: string | null;
   startedAt: string | null; finishedAt: string | null; result: EvidenceResult; url: string | null; logKey: string | null;
 };
-/** ready: passing head checks; no_ci: confirmed absence of CI, ready for human review without checks. */
-export const NO_CI_NOTE = 'No CI configured';
+/** ready: passing head checks; no_ci: confirmed absence of head CI, ready for human review without checks. */
+export const NO_CI_NOTE = 'No CI reported';
 export type EvidenceState = 'no_ci' | 'ready' | 'pending' | 'failed' | 'missing' | 'unchecked';
 export type EvidenceGate = { state: EvidenceState; headSha: string | null; reason: string; current: Evidence[]; stale: Evidence[] };
 
@@ -64,7 +64,7 @@ export function evidenceGate(records: Evidence[], headSha: string | null): Evide
   const head = shortSha(headSha);
   const checks = current.filter((record) => record.kind === 'check');
   if (!checks.length && current.some((record) => record.kind === 'note' && record.name === NO_CI_NOTE && record.result === 'skipped'))
-    return gate('no_ci', `No CI configured for ${head}. Run completed; ready for human review without automated checks.`);
+    return gate('no_ci', `No CI reported on ${head}. Run completed; ready for human review without automated checks.`);
   if (!checks.length) return gate('missing', stale.length
     ? `Checks were recorded on ${shortSha(stale[0].sourceSha)}, which is stale. The head is now ${head} and has no checks yet.`
     : `No checks reported on ${head}. Not ready for review without evidence for this commit.`);

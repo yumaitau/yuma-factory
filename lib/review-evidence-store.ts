@@ -65,7 +65,7 @@ export async function observePullHead(db: Db, pullRequestUrl: string, sha: strin
 }
 
 /** Observe the head, record its checks, and return the gate over everything the run has recorded. */
-export async function syncHeadEvidence(db: Db, client: Client, input: { runId: string; ticketId: string; owner: string; repo: string; headSha: string; baseBranch?: string }) {
+export async function syncHeadEvidence(db: Db, client: Client, input: { runId: string; ticketId: string; owner: string; repo: string; headSha: string; baseBranch?: string; updatedAt?: string }) {
   await observeHead(db, input.runId, input.headSha);
   // An unreadable check list keeps the stored records; the gate still judges them against the new head.
   // Changed or unreadable checks/policy invalidate an earlier no-CI observation.
@@ -76,7 +76,13 @@ export async function syncHeadEvidence(db: Db, client: Client, input: { runId: s
     if (records.length || !input.baseBranch) return;
     const params = { owner: input.owner, repo: input.repo, request: { signal: AbortSignal.timeout(15_000) } };
     const { data: workflows } = await client.request('GET /repos/{owner}/{repo}/actions/workflows', { ...params, per_page: 1 });
-    if (workflows.total_count !== 0) return;
+    if (workflows.total_count !== 0) {
+      // Release-only and default-branch workflows may never run on a PR. Allow the same
+      // registration grace period as the supervisor, and confirm no workflow is queued.
+      if (!input.updatedAt || Date.now() - Date.parse(input.updatedAt) < 30 * 60_000 || !Number.isFinite(Date.parse(input.updatedAt))) return;
+      const { data: active } = await client.request('GET /repos/{owner}/{repo}/actions/runs', { ...params, head_sha: input.headSha, per_page: 1 });
+      if (active.total_count !== 0) return;
+    }
     const github = async (path: string) => {
       try { return (await client.request(`GET /repos/{owner}/{repo}${path}`, params)).data; }
       catch (error) {

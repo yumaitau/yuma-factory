@@ -1,3 +1,7 @@
 dangerouslyAllowAllBuilds: true
 patchedDependencies:
   '@opennextjs/cloudflare@1.20.11': patches/@opennextjs__cloudflare@1.20.11.patch
+overrides:
+  body-parser@2: '>=2.4.0'
+  undici@6: '>=6.29.1 <7'
+  undici@7: '>=7.30.1 <8'

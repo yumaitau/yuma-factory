@@ -3,3 +3,5 @@
 # its own workspace root rather than deferring to the parent Factory app.
 packages: []
 dangerouslyAllowAllBuilds: true
+overrides:
+  'undici@7': 7.30.1

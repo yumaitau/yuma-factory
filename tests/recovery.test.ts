@@ -473,8 +473,46 @@ test('a start reported as failed that launched anyway clears the outage clock', 
     start: async () => { launched = true; throw new Error('Sandbox start timed out.'); },
     pause: async () => {},
   };
+  // An outage already in progress, then a start that errors but launches.
+  f.job().startFailingSince = 500;
   await recoverJob(f.bucket, 'run', 'account', ops, 1000);
-  assert.equal(f.job().startFailingSince, 1000);
-  await recoverJob(f.bucket, 'run', 'account', ops, f.job().retryAt!);
   assert.equal(f.job().startFailingSince, undefined);
+});
+
+test('a start that launched despite its error does not start the outage clock, even if it exits before the next poll', async () => {
+  const f = fixture(0);
+  let calls = 0;
+  const ops = {
+    // Running when the failed start is inspected; already gone by the next poll.
+    inspect: async () => ({ running: calls === 1, result: null, progress: null }),
+    start: async () => { calls++; throw new Error('Sandbox start timed out.'); },
+    pause: async () => {},
+  };
+  await recoverJob(f.bucket, 'run', 'account', ops, 1000);
+  assert.equal(f.job().startFailingSince, undefined);
+  // The next real failure starts a fresh interval rather than inheriting an old one.
+  await recoverJob(f.bucket, 'run', 'account', ops, f.job().retryAt!);
+  const next = f.job().retryAt!;
+  await recoverJob(f.bucket, 'run', 'account', ops, next);
+  assert.equal(f.job().startFailingSince, next);
+});
+
+test('an attempt that dies before it was seen running keeps the recovery history ahead of its log', async () => {
+  const f = fixture(1);
+  f.job().progress = { status: 'running', log: 'Automatic recovery scheduled.\nStarting attempt 2; recovering the same branch and PR when present.' };
+  await recoverJob(f.bucket, 'run', 'account', {
+    inspect: async () => ({ running: false, progress: null, result: { status: 'failed' as const, log: 'Cloning.\nAgent crashed.' } }),
+    start: async () => assert.fail('Restart waits for the backoff'),
+    pause: async () => {},
+  }, 1000);
+  assert.match(f.job().progress?.log ?? '', /^Automatic recovery scheduled\.\nStarting attempt 2;[^\n]*\nCloning\.\nAgent crashed\.\nAutomatic recovery scheduled for/);
+  // An attempt log that already continues the durable log is not repeated.
+  const seen = fixture(1);
+  seen.job().progress = { status: 'running', log: 'Cloning.' };
+  await recoverJob(seen.bucket, 'run', 'account', {
+    inspect: async () => ({ running: false, progress: null, result: { status: 'failed' as const, log: 'Cloning.\nAgent crashed.' } }),
+    start: async () => assert.fail('Restart waits for the backoff'),
+    pause: async () => {},
+  }, 1000);
+  assert.match(seen.job().progress?.log ?? '', /^Cloning\.\nAgent crashed\.\nAutomatic recovery scheduled for/);
 });

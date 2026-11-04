@@ -172,8 +172,12 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
       }
       await ops.pause?.(state.result);
       // A fresh container after a deployment or host loss has no process, result or output of its own.
-      const interrupted = state.result?.log ?? state.progress?.log ??
-        withLine(job.progress?.log, `Attempt ${job.attempt} ended without a result: the runner process or its container was lost.`);
+      // An attempt's own log restarts with its process; keep the recovery history before it unless it already holds it.
+      const attemptLog = state.result?.log ?? state.progress?.log;
+      const durable = job.progress?.log ?? '';
+      const interrupted = attemptLog === undefined
+        ? withLine(durable, `Attempt ${job.attempt} ended without a result: the runner process or its container was lost.`)
+        : attemptLog.startsWith(durable) ? attemptLog : withLine(durable, attemptLog);
       if (!job.retryAt && (job.restarts ?? 0) >= MAX_RUNNER_RESTARTS) {
         job.terminalResult = {
           ...job.progress, ...state.progress, ...state.result, status: 'failed',
@@ -204,19 +208,22 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
       // A failed start may have reached the sandbox. Release the account only
       // after confirming no process is running; an uncertain response is retried.
       let stopped = false;
+      let launched = false;
       try {
         const state = await ops.inspect();
         if (!state.running) {
           await ops.pause?.(state.result);
           stopped = true;
-        }
+        } else launched = true;
       } catch { /* Next poll reconciles an unreachable sandbox. */ }
       // Start errors come from the runner's own messages and the Sandbox SDK. The request file holds
       // GitHub and run tokens, so scrub token shapes in case a future SDK echoes what it wrote.
       const reason = error instanceof Error && error.message
         ? ` (${redactTokens(error.message).slice(0, 300)})` : '';
-      job.startFailingSince ??= now;
-      if (stopped && now - job.startFailingSince >= MAX_START_FAILURE_MS) {
+      // A start that launched despite the error is not an outage, even if it exits before the next poll.
+      if (launched) delete job.startFailingSince;
+      else job.startFailingSince ??= now;
+      if (stopped && job.startFailingSince !== undefined && now - job.startFailingSince >= MAX_START_FAILURE_MS) {
         job.terminalResult = { ...job.progress, status: 'failed',
           log: withLine(job.progress?.log, `Runner/account/GitHub unavailable${reason}. Starts kept failing for ${Math.round((now - job.startFailingSince) / 3_600_000)} hours. Existing branch and PR preserved.`) };
         return job.terminalResult;

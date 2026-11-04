@@ -406,6 +406,8 @@ async function run() {
   // Declared below; a rate-limit wait reports progress so recovery never mistakes it for a wedged run.
   let progress;
   const github = createGithub({ repoFullName: req.repoFullName, token: githubToken, onWait: async (message) => progress?.(message) });
+  // CI deadlines measure CI, not time spent waiting on GitHub's rate limit.
+  const ciClock = () => Date.now() - github.waitedMs();
   const pages = async (path, field) => {
     const items = [];
     for (let page = 1; ; page++) {
@@ -1160,6 +1162,7 @@ async function run() {
         };
         return finishWithGreenCI({
           snapshot,
+          now: ciClock,
           progress,
           wait: async () => {
             await new Promise((resolve) => setTimeout(resolve, 30000));
@@ -1293,6 +1296,7 @@ async function run() {
       async function watchMain(mergeSha) {
         await finishCommitCI({
           snapshot: () => snapshotCommit(mergeSha),
+          now: ciClock,
           repair: (current) => repairMain(mergeSha, current),
           done: async () => {
             if (waitsOn.length || await issueWaits()) {

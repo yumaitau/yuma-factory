@@ -95,3 +95,25 @@ test("an empty success body still parses", async () => {
   const { github } = client([new Response("", { status: 201 })]);
   assert.deepEqual(await github("/actions/runs/1/rerun-failed-jobs", "POST"), {});
 });
+
+test("repeated secondary limits back off, and waits are reported for CI deadlines", async () => {
+  const limited = () => reply(403, { message: "You have exceeded a secondary rate limit." });
+  const { github, slept } = client([limited(), limited(), reply(200, {})]);
+  await github("/pulls");
+  // 1 min then 2 min, each reported in one step.
+  assert.deepEqual(slept, [60_000, 120_000]);
+  assert.equal(github.waitedMs(), 180_000);
+});
+
+test("rate-limit waits do not use up the retries for server errors", async () => {
+  const limited = () => reply(429, {});
+  const { github, calls } = client([limited(), limited(), limited(), reply(502, {}), reply(200, { ok: true })]);
+  assert.deepEqual(await github("/pulls/1"), { ok: true });
+  assert.equal(calls.length, 5);
+});
+
+test("a PUT, such as a merge, is never resent after a server error", async () => {
+  const { github, calls } = client([reply(502, {})]);
+  await assert.rejects(github("/pulls/1/merge", "PUT", {}), /failed \(502\)/);
+  assert.equal(calls.length, 1);
+});

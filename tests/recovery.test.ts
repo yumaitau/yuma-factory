@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_RUNNER_RESTARTS, recoverJob, retryDelay, type DurableJob } from '../sandbox-runner/src/recovery';
+import { MAX_RUNNER_RESTARTS, MAX_START_FAILURE_MS, recoverJob, redactTokens, retryDelay, type DurableJob } from '../sandbox-runner/src/recovery';
 import type { RunResult } from '../shared/codex';
 
 const request = { accountId: 'account', repoFullName: 'owner/repo', defaultBranch: 'main', branchName: 'factory/ticket-1', prompt: 'Fix bug', prTitle: 'Fix bug', issueNumber: 1 };
@@ -381,4 +381,138 @@ test('a run that keeps failing restarts at most three times, then fails for Fact
   assert.deepEqual(await recoverJob(f.bucket, 'run', 'account', ops, now + 2), result);
   assert.equal(started, MAX_RUNNER_RESTARTS);
   assert.ok(stopped > 0);
+});
+
+test('a lost container keeps the earlier log and names the cause when restarts run out', async () => {
+  const f = fixture(1);
+  f.job().progress = { status: 'running', log: 'Cloned repository.\nRunning tests.' };
+  const lost = { inspect: async () => ({ running: false, result: null, progress: null }), start: async () => {}, pause: async () => {} };
+  let now = 1000;
+  for (let restart = 1; restart <= MAX_RUNNER_RESTARTS; restart++) {
+    await recoverJob(f.bucket, 'run', 'account', lost, now);
+    now = f.job().retryAt!;
+    await recoverJob(f.bucket, 'run', 'account', lost, now);
+  }
+  const result = await recoverJob(f.bucket, 'run', 'account', lost, now + 1);
+  assert.equal(result.status, 'failed');
+  // The first attempt's output and every restart survive, not only "Starting attempt 4".
+  assert.match(result.log, /^Cloned repository\.\nRunning tests\./);
+  assert.match(result.log, /Attempt 4 ended without a result: the runner process or its container was lost\./);
+  assert.match(result.log, /Starting attempt 4;[\s\S]*Stopped after 3 automatic restarts/);
+});
+
+test('a failed start records why it failed', async () => {
+  const f = fixture(0);
+  await recoverJob(f.bucket, 'run', 'account', {
+    inspect: async () => ({ running: false, result: null, progress: null }),
+    start: async () => { throw new Error('GitHub credential renewal unavailable (503).'); },
+    pause: async () => {},
+  }, 1000);
+  assert.match(f.job().progress?.log ?? '', /Starting attempt 1;[^\n]*\nRunner\/account\/GitHub unavailable \(GitHub credential renewal unavailable \(503\)\.\)/);
+});
+
+test('starts that keep failing end the run with the reason instead of holding the ticket for days', async () => {
+  const f = fixture(0);
+  let paused = 0;
+  const ops = {
+    inspect: async () => ({ running: false, result: null, progress: null }),
+    start: async () => { throw new Error('Subscription is not connected.'); },
+    pause: async () => { paused++; },
+  };
+  let now = 1000;
+  while (now - 1000 < MAX_START_FAILURE_MS) {
+    assert.equal((await recoverJob(f.bucket, 'run', 'account', ops, now)).status, 'running');
+    assert.equal(f.job().restarts, undefined);
+    now = f.job().retryAt!;
+  }
+  const result = await recoverJob(f.bucket, 'run', 'account', ops, now);
+  assert.equal(result.status, 'failed');
+  assert.match(result.log, /Subscription is not connected\.\)\. Starts kept failing for 6 hours/);
+  assert.ok(paused > 0);
+  // Terminal: later polls neither start nor change it.
+  assert.deepEqual(await recoverJob(f.bucket, 'run', 'account', { ...ops, start: async () => assert.fail('Run already ended') }, now + 60_000), result);
+});
+
+test('a start that succeeds after an outage clears the outage clock', async () => {
+  const f = fixture(0);
+  let fail = true, started = false;
+  const ops = {
+    inspect: async () => ({ running: started, result: null, progress: null }),
+    start: async () => {
+      if (fail) throw new Error('GitHub credential renewal unavailable (502).');
+      started = true;
+    },
+    pause: async () => {},
+  };
+  await recoverJob(f.bucket, 'run', 'account', ops, 1000);
+  assert.equal(f.job().startFailingSince, 1000);
+  fail = false;
+  await recoverJob(f.bucket, 'run', 'account', ops, f.job().retryAt!);
+  assert.equal(started, true);
+  assert.equal(f.job().startFailingSince, undefined);
+});
+
+test('start errors never carry a credential into the log', async () => {
+  const run = `run_${'a'.repeat(32)}.${'B'.repeat(43)}`;
+  assert.equal(redactTokens(`write failed: {"githubToken":"ghs_${'x'.repeat(36)}","runToken":"${run}"}`),
+    'write failed: {"githubToken":"[redacted]","runToken":"[redacted]"}');
+  const f = fixture(0);
+  await recoverJob(f.bucket, 'run', 'account', {
+    inspect: async () => ({ running: false, result: null, progress: null }),
+    start: async () => { throw new Error(`write failed: ghs_${'y'.repeat(36)}`); },
+    pause: async () => {},
+  }, 1000);
+  assert.doesNotMatch(f.job().progress?.log ?? '', /ghs_/);
+});
+
+test('a start reported as failed that launched anyway clears the outage clock', async () => {
+  const f = fixture(0);
+  let launched = false;
+  const ops = {
+    inspect: async () => ({ running: launched, result: null, progress: null }),
+    start: async () => { launched = true; throw new Error('Sandbox start timed out.'); },
+    pause: async () => {},
+  };
+  // An outage already in progress, then a start that errors but launches.
+  f.job().startFailingSince = 500;
+  await recoverJob(f.bucket, 'run', 'account', ops, 1000);
+  assert.equal(f.job().startFailingSince, undefined);
+});
+
+test('a start that launched despite its error does not start the outage clock, even if it exits before the next poll', async () => {
+  const f = fixture(0);
+  let calls = 0;
+  const ops = {
+    // Running when the failed start is inspected; already gone by the next poll.
+    inspect: async () => ({ running: calls === 1, result: null, progress: null }),
+    start: async () => { calls++; throw new Error('Sandbox start timed out.'); },
+    pause: async () => {},
+  };
+  await recoverJob(f.bucket, 'run', 'account', ops, 1000);
+  assert.equal(f.job().startFailingSince, undefined);
+  // The next real failure starts a fresh interval rather than inheriting an old one.
+  await recoverJob(f.bucket, 'run', 'account', ops, f.job().retryAt!);
+  const next = f.job().retryAt!;
+  await recoverJob(f.bucket, 'run', 'account', ops, next);
+  assert.equal(f.job().startFailingSince, next);
+});
+
+test('an attempt that dies before it was seen running keeps the recovery history ahead of its log', async () => {
+  const f = fixture(1);
+  f.job().progress = { status: 'running', log: 'Automatic recovery scheduled.\nStarting attempt 2; recovering the same branch and PR when present.' };
+  await recoverJob(f.bucket, 'run', 'account', {
+    inspect: async () => ({ running: false, progress: null, result: { status: 'failed' as const, log: 'Cloning.\nAgent crashed.' } }),
+    start: async () => assert.fail('Restart waits for the backoff'),
+    pause: async () => {},
+  }, 1000);
+  assert.match(f.job().progress?.log ?? '', /^Automatic recovery scheduled\.\nStarting attempt 2;[^\n]*\nCloning\.\nAgent crashed\.\nAutomatic recovery scheduled for/);
+  // An attempt log that already continues the durable log is not repeated.
+  const seen = fixture(1);
+  seen.job().progress = { status: 'running', log: 'Cloning.' };
+  await recoverJob(seen.bucket, 'run', 'account', {
+    inspect: async () => ({ running: false, progress: null, result: { status: 'failed' as const, log: 'Cloning.\nAgent crashed.' } }),
+    start: async () => assert.fail('Restart waits for the backoff'),
+    pause: async () => {},
+  }, 1000);
+  assert.match(seen.job().progress?.log ?? '', /^Cloning\.\nAgent crashed\.\nAutomatic recovery scheduled for/);
 });

@@ -21,6 +21,8 @@ export type DurableJob = {
   // Restarts after a started attempt failed or died; start failures (outages) do not count.
   restarts?: number;
   retryAt?: number;
+  // When the current run of failed starts began; any successful start clears it.
+  startFailingSince?: number;
   leaseUntil?: number;
   progress?: RunResult;
   cancelRequested?: boolean;
@@ -36,7 +38,16 @@ type Operations = {
 export const SILENT_CODING_MS = 60 * 60_000;
 // Past this, the failure goes to Factory, which applies its own retry budget with the failure in the prompt.
 export const MAX_RUNNER_RESTARTS = 3;
+// Starts fail while a subscription is reconnected or GitHub is down, and retry without using a restart.
+// Past this the run fails with the reason, so Factory can retry on another subscription instead of holding the ticket for days.
+export const MAX_START_FAILURE_MS = 6 * 60 * 60_000;
 export const retryDelay = (attempt: number) => Math.min(15 * 60_000, 60_000 * 2 ** Math.min(Math.max(attempt - 1, 0), 4));
+// The runner keeps the same bound on its own log.
+const LOG_LIMIT = 60_000;
+// GitHub installation tokens and Factory's run and merge tokens (`run_<id>.<hmac>`).
+export const redactTokens = (text: string) => text.replace(/\b(?:gh[pousr]_|github_pat_)\w+|\brun_[a-f0-9]{32}\.[\w-]+/g, '[redacted]');
+/** Recovery appends to a run's log, never replaces it: the last attempt's cause must reach Factory. */
+const withLine = (log: string | undefined, line: string) => (log ? `${log}\n${line}` : line).slice(-LOG_LIMIT);
 
 /** Optional evidence/credential reads must not prevent stopping an unhealthy sandbox. */
 export async function beforeStop<T>(operation: () => Promise<T>): Promise<T | undefined> {
@@ -153,15 +164,24 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
         return state.result;
       }
       if (state.running && !state.result) {
+        // A start that reported failure but launched anyway is not an outage.
+        delete job.startFailingSince;
         delete job.retryAt;
         job.progress = state.progress ?? waiting();
         return waiting();
       }
       await ops.pause?.(state.result);
+      // A fresh container after a deployment or host loss has no process, result or output of its own.
+      // An attempt's own log restarts with its process; keep the recovery history before it unless it already holds it.
+      const attemptLog = state.result?.log ?? state.progress?.log;
+      const durable = job.progress?.log ?? '';
+      const interrupted = attemptLog === undefined
+        ? withLine(durable, `Attempt ${job.attempt} ended without a result: the runner process or its container was lost.`)
+        : attemptLog.startsWith(durable) ? attemptLog : withLine(durable, attemptLog);
       if (!job.retryAt && (job.restarts ?? 0) >= MAX_RUNNER_RESTARTS) {
         job.terminalResult = {
           ...job.progress, ...state.progress, ...state.result, status: 'failed',
-          log: `${state.result?.log ?? state.progress?.log ?? job.progress?.log ?? 'Runner interrupted.'}\nStopped after ${MAX_RUNNER_RESTARTS} automatic restarts. Existing branch and PR preserved.`,
+          log: withLine(interrupted, `Stopped after ${MAX_RUNNER_RESTARTS} automatic restarts. Existing branch and PR preserved.`),
         };
         return job.terminalResult;
       }
@@ -170,7 +190,7 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
         job.retryAt = now + retryDelay(job.attempt);
         job.progress = {
           ...state.result, ...state.progress, status: 'running',
-          log: `${state.result?.log ?? 'Runner interrupted.'}\nAutomatic recovery scheduled for ${new Date(job.retryAt).toISOString()}. Existing branch and PR will be reused.`,
+          log: withLine(interrupted, `Automatic recovery scheduled for ${new Date(job.retryAt).toISOString()}. Existing branch and PR will be reused.`),
         };
         return waiting();
       }
@@ -178,20 +198,39 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
     const recovering = job.attempt > 0;
     job.attempt++;
     delete job.retryAt;
-    job.progress = { ...job.progress, status: 'running', log: `Starting attempt ${job.attempt}; recovering the same branch and PR when present.` };
+    job.progress = { ...job.progress, status: 'running', log: withLine(job.progress?.log, `Starting attempt ${job.attempt}; recovering the same branch and PR when present.`) };
     // Record intent before effects so a Worker crash cannot lose the job.
     await save();
     try {
       await ops.start(job.request, recovering);
-    } catch {
+      delete job.startFailingSince;
+    } catch (error) {
       // A failed start may have reached the sandbox. Release the account only
       // after confirming no process is running; an uncertain response is retried.
+      let stopped = false;
+      let launched = false;
       try {
         const state = await ops.inspect();
-        if (!state.running) await ops.pause?.(state.result);
+        if (!state.running) {
+          await ops.pause?.(state.result);
+          stopped = true;
+        } else launched = true;
       } catch { /* Next poll reconciles an unreachable sandbox. */ }
+      // Start errors come from the runner's own messages and the Sandbox SDK. The request file holds
+      // GitHub and run tokens, so scrub token shapes in case a future SDK echoes what it wrote.
+      const reason = error instanceof Error && error.message
+        ? ` (${redactTokens(error.message).slice(0, 300)})` : '';
+      // A start that launched despite the error is not an outage, even if it exits before the next poll.
+      if (launched) delete job.startFailingSince;
+      else job.startFailingSince ??= now;
+      if (stopped && job.startFailingSince !== undefined && now - job.startFailingSince >= MAX_START_FAILURE_MS) {
+        job.terminalResult = { ...job.progress, status: 'failed',
+          log: withLine(job.progress?.log, `Runner/account/GitHub unavailable${reason}. Starts kept failing for ${Math.round((now - job.startFailingSince) / 3_600_000)} hours. Existing branch and PR preserved.`) };
+        return job.terminalResult;
+      }
       job.retryAt = now + retryDelay(job.attempt);
-      job.progress = { ...job.progress, status: 'running', log: `Runner/account/GitHub unavailable. Automatic retry at ${new Date(job.retryAt).toISOString()}; ticket remains open.` };
+      job.progress = { ...job.progress, status: 'running',
+        log: withLine(job.progress?.log, `Runner/account/GitHub unavailable${reason}. Automatic retry at ${new Date(job.retryAt).toISOString()}; ticket remains open.`) };
     }
     return waiting();
   } finally {

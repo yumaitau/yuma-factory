@@ -44,6 +44,8 @@ export const MAX_START_FAILURE_MS = 6 * 60 * 60_000;
 export const retryDelay = (attempt: number) => Math.min(15 * 60_000, 60_000 * 2 ** Math.min(Math.max(attempt - 1, 0), 4));
 // The runner keeps the same bound on its own log.
 const LOG_LIMIT = 60_000;
+// GitHub installation tokens and Factory's run and merge tokens (`run_<id>.<hmac>`).
+export const redactTokens = (text: string) => text.replace(/\b(?:gh[pousr]_|github_pat_)\w+|\brun_[a-f0-9]{32}\.[\w-]+/g, '[redacted]');
 /** Recovery appends to a run's log, never replaces it: the last attempt's cause must reach Factory. */
 const withLine = (log: string | undefined, line: string) => (log ? `${log}\n${line}` : line).slice(-LOG_LIMIT);
 
@@ -162,6 +164,8 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
         return state.result;
       }
       if (state.running && !state.result) {
+        // A start that reported failure but launched anyway is not an outage.
+        delete job.startFailingSince;
         delete job.retryAt;
         job.progress = state.progress ?? waiting();
         return waiting();
@@ -207,8 +211,10 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
           stopped = true;
         }
       } catch { /* Next poll reconciles an unreachable sandbox. */ }
-      // Start errors carry no credentials: they come from the runner's own messages and the Sandbox SDK.
-      const reason = error instanceof Error && error.message ? ` (${error.message.slice(0, 300)})` : '';
+      // Start errors come from the runner's own messages and the Sandbox SDK. The request file holds
+      // GitHub and run tokens, so scrub token shapes in case a future SDK echoes what it wrote.
+      const reason = error instanceof Error && error.message
+        ? ` (${redactTokens(error.message).slice(0, 300)})` : '';
       job.startFailingSince ??= now;
       if (stopped && now - job.startFailingSince >= MAX_START_FAILURE_MS) {
         job.terminalResult = { ...job.progress, status: 'failed',

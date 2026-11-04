@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_RUNNER_RESTARTS, MAX_START_FAILURE_MS, recoverJob, retryDelay, type DurableJob } from '../sandbox-runner/src/recovery';
+import { MAX_RUNNER_RESTARTS, MAX_START_FAILURE_MS, recoverJob, redactTokens, retryDelay, type DurableJob } from '../sandbox-runner/src/recovery';
 import type { RunResult } from '../shared/codex';
 
 const request = { accountId: 'account', repoFullName: 'owner/repo', defaultBranch: 'main', branchName: 'factory/ticket-1', prompt: 'Fix bug', prTitle: 'Fix bug', issueNumber: 1 };
@@ -449,5 +449,32 @@ test('a start that succeeds after an outage clears the outage clock', async () =
   fail = false;
   await recoverJob(f.bucket, 'run', 'account', ops, f.job().retryAt!);
   assert.equal(started, true);
+  assert.equal(f.job().startFailingSince, undefined);
+});
+
+test('start errors never carry a credential into the log', async () => {
+  const run = `run_${'a'.repeat(32)}.${'B'.repeat(43)}`;
+  assert.equal(redactTokens(`write failed: {"githubToken":"ghs_${'x'.repeat(36)}","runToken":"${run}"}`),
+    'write failed: {"githubToken":"[redacted]","runToken":"[redacted]"}');
+  const f = fixture(0);
+  await recoverJob(f.bucket, 'run', 'account', {
+    inspect: async () => ({ running: false, result: null, progress: null }),
+    start: async () => { throw new Error(`write failed: ghs_${'y'.repeat(36)}`); },
+    pause: async () => {},
+  }, 1000);
+  assert.doesNotMatch(f.job().progress?.log ?? '', /ghs_/);
+});
+
+test('a start reported as failed that launched anyway clears the outage clock', async () => {
+  const f = fixture(0);
+  let launched = false;
+  const ops = {
+    inspect: async () => ({ running: launched, result: null, progress: null }),
+    start: async () => { launched = true; throw new Error('Sandbox start timed out.'); },
+    pause: async () => {},
+  };
+  await recoverJob(f.bucket, 'run', 'account', ops, 1000);
+  assert.equal(f.job().startFailingSince, 1000);
+  await recoverJob(f.bucket, 'run', 'account', ops, f.job().retryAt!);
   assert.equal(f.job().startFailingSince, undefined);
 });

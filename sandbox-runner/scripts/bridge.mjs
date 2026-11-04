@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { findExistingRun } from "./resume.mjs";
+import { createGithub } from "./github-api.mjs";
 import { evaluateCI, finishCommitCI, githubBlockReason, isCiConfigPath, finishWithGreenCI, isLowRisk, isPassingConclusion, labelNames, latestWorkflows, loadRequiredChecks, requestFactoryMerge } from "./ci.mjs";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
@@ -402,28 +403,11 @@ async function run() {
     sensitive.add(token);
     return token;
   };
-  const github = async (path, method = "GET", body) => {
-    const response = await fetch(`https://api.github.com/repos/${req.repoFullName}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${await githubToken()}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "Factory",
-        "Content-Type": "application/json",
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!response.ok) {
-      const error = new Error(`GitHub ${method} ${path.split("?")[0]} failed (${response.status}). Ticket left open.`);
-      error.status = response.status;
-      error.apiMessage = (await response.json().catch(() => ({}))).message;
-      throw error;
-    }
-    // Some writes, such as job re-runs, answer with an empty body.
-    const text = await response.text();
-    return text ? JSON.parse(text) : {};
-  };
+  // Declared below; a rate-limit wait reports progress so recovery never mistakes it for a wedged run.
+  let progress;
+  const github = createGithub({ repoFullName: req.repoFullName, token: githubToken, onWait: async (message) => progress?.(message) });
+  // CI deadlines measure CI, not time spent waiting on GitHub's rate limit.
+  const ciClock = () => Date.now() - github.waitedMs();
   const pages = async (path, field) => {
     const items = [];
     for (let page = 1; ; page++) {
@@ -527,7 +511,7 @@ async function run() {
       if (!(await syncActivities()).ok) failures++;
   };
   let lastStatus = "";
-  const progress = async (message) => {
+  progress = async (message) => {
     appendLog(message);
     lastStatus = redact(message);
     activity({ type: "thought", body: message });
@@ -1178,6 +1162,7 @@ async function run() {
         };
         return finishWithGreenCI({
           snapshot,
+          now: ciClock,
           progress,
           wait: async () => {
             await new Promise((resolve) => setTimeout(resolve, 30000));
@@ -1311,6 +1296,7 @@ async function run() {
       async function watchMain(mergeSha) {
         await finishCommitCI({
           snapshot: () => snapshotCommit(mergeSha),
+          now: ciClock,
           repair: (current) => repairMain(mergeSha, current),
           done: async () => {
             if (waitsOn.length || await issueWaits()) {

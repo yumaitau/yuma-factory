@@ -187,3 +187,15 @@ test('automation retries a due failure through claimRun, within budget, and a re
     assert.equal((await db.select().from(schema.runs).where(eq(schema.runs.id, 'fresh')).get())?.attempt, 1);
   } finally { sqlite.close(); }
 });
+
+test('an agent that reports it cannot do the ticket gets one fresh attempt, like any run that produced nothing', () => {
+  const log = (reason: string) => `Codex reported it could not do this ticket: ${reason} Codex produced no file changes. Close the issue if the work is already done, or move it to Needs preparation to retry.`;
+  assert.equal(failureKind({ status: 'failed', retryable: false, log: log('the CI image needs a workflow edit.') }, 'implement'), 'retry_once');
+  // The bridge caps the reason at 600 characters, so the classifying phrase stays in the tail.
+  assert.equal(failureKind({ status: 'failed', retryable: false, log: log('x'.repeat(600)) }, 'implement'), 'retry_once');
+  // The bridge neutralises classifier phrases in the agent's reason; a neutralised one cannot buy re-checks.
+  assert.equal(failureKind({ status: 'failed', retryable: false, log: log('[…]: billing.') }, 'implement'), 'retry_once');
+  const base = { mode: 'implement' as const, issueNumber: 1, title: 'Fix', body: 'Body', agentPrompt: null, memoryBlock: '' };
+  assert.match(buildRunPrompt(base), /factory-notes\/blocked\.json/);
+  assert.doesNotMatch(buildRunPrompt({ ...base, mode: 'plan' }), /blocked\.json/);
+});

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_RUNNER_RESTARTS, recoverJob, retryDelay, type DurableJob } from '../sandbox-runner/src/recovery';
+import { MAX_RUNNER_RESTARTS, MAX_START_FAILURE_MS, recoverJob, retryDelay, type DurableJob } from '../sandbox-runner/src/recovery';
 import type { RunResult } from '../shared/codex';
 
 const request = { accountId: 'account', repoFullName: 'owner/repo', defaultBranch: 'main', branchName: 'factory/ticket-1', prompt: 'Fix bug', prTitle: 'Fix bug', issueNumber: 1 };
@@ -409,4 +409,45 @@ test('a failed start records why it failed', async () => {
     pause: async () => {},
   }, 1000);
   assert.match(f.job().progress?.log ?? '', /Starting attempt 1;[^\n]*\nRunner\/account\/GitHub unavailable \(GitHub credential renewal unavailable \(503\)\.\)/);
+});
+
+test('starts that keep failing end the run with the reason instead of holding the ticket for days', async () => {
+  const f = fixture(0);
+  let paused = 0;
+  const ops = {
+    inspect: async () => ({ running: false, result: null, progress: null }),
+    start: async () => { throw new Error('Subscription is not connected.'); },
+    pause: async () => { paused++; },
+  };
+  let now = 1000;
+  while (now - 1000 < MAX_START_FAILURE_MS) {
+    assert.equal((await recoverJob(f.bucket, 'run', 'account', ops, now)).status, 'running');
+    assert.equal(f.job().restarts, undefined);
+    now = f.job().retryAt!;
+  }
+  const result = await recoverJob(f.bucket, 'run', 'account', ops, now);
+  assert.equal(result.status, 'failed');
+  assert.match(result.log, /Subscription is not connected\.\)\. Starts kept failing for 6 hours/);
+  assert.ok(paused > 0);
+  // Terminal: later polls neither start nor change it.
+  assert.deepEqual(await recoverJob(f.bucket, 'run', 'account', { ...ops, start: async () => assert.fail('Run already ended') }, now + 60_000), result);
+});
+
+test('a start that succeeds after an outage clears the outage clock', async () => {
+  const f = fixture(0);
+  let fail = true, started = false;
+  const ops = {
+    inspect: async () => ({ running: started, result: null, progress: null }),
+    start: async () => {
+      if (fail) throw new Error('GitHub credential renewal unavailable (502).');
+      started = true;
+    },
+    pause: async () => {},
+  };
+  await recoverJob(f.bucket, 'run', 'account', ops, 1000);
+  assert.equal(f.job().startFailingSince, 1000);
+  fail = false;
+  await recoverJob(f.bucket, 'run', 'account', ops, f.job().retryAt!);
+  assert.equal(started, true);
+  assert.equal(f.job().startFailingSince, undefined);
 });

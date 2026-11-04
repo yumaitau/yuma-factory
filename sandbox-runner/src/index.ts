@@ -187,7 +187,11 @@ async function renewGithub(env: Env, id: string, accountId: string, resume = fal
     body: JSON.stringify({ id, accountId, action: resume ? "resume" : "renew" }),
     signal: AbortSignal.timeout(30_000),
   });
-  if (!response.ok) throw new Error(`GitHub credential renewal unavailable (${response.status}).`);
+  if (!response.ok) {
+    // Factory answers with its own fixed reason, such as a subscription that needs reconnecting.
+    const reason = (await response.json<{ error?: unknown }>().catch(() => null))?.error;
+    throw new Error(`GitHub credential renewal unavailable (${response.status}${typeof reason === "string" ? `: ${reason.slice(0, 200)}` : ""}).`);
+  }
   return response.json<{ token: string; issuedAt: number; runToken?: string; mergeToken?: string }>();
 }
 async function recover(env: Env, id: string, accountId: string, cancel = false) {

@@ -1333,6 +1333,11 @@ async function run() {
         await watchMain(existingPR.merge_commit_sha);
         ciHeadSha = existingPR.head?.sha || existingPR.merge_commit_sha;
       } else if (!existingBranch && !(await publishChanges())) {
+        // The agent says it could not do the work, not that it is done: no adversarial check to spend.
+        // The wording keeps run-retry.ts's one fresh attempt, which has found workarounds before.
+        const blocked = await blockedReason();
+        if (blocked)
+          throw Object.assign(new Error(`${agentName} produced no file changes and reported it could not do this ticket: ${blocked} Close the issue if the work is already done, or move it to Needs preparation to retry.`), { retryable: false });
         await closeIfAlreadyDone(summary);
         alreadyDone = true;
       } else {

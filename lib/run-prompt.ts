@@ -7,6 +7,9 @@ export const PROMPT_LIMIT = 38_000;
 
 // Factory refuses to publish CI configuration, and CI installs from lockfiles.
 export const CI_RULES = 'Never modify .github/workflows or .github/actions: Factory will not publish those changes. If CI fails because of its own configuration or infrastructure (for example an unavailable image or missing secret), explain that in your summary instead. When dependencies change, update every lockfile the repository uses (for example bun.lock, pnpm-lock.yaml, yarn.lock and package-lock.json) with the matching package manager.';
+// Read by the bridge when nothing changed: it skips checking an "already done" claim the agent never made.
+export const BLOCKED_PATH = '/workspace/factory-notes/blocked.json';
+export const BLOCKED_RULE = `If no change in this repository can do the task, because it needs a workflow edit, a secret, GitHub or runner settings or another system, change nothing and write ${BLOCKED_PATH} as {"reason":"what must change, where, and who can change it"}. Do not write it when the work is already done; say so in your summary instead.`;
 
 export type PromptInput = {
   mode: 'implement' | 'plan';
@@ -31,7 +34,7 @@ export function buildRunPrompt(input: PromptInput) {
   const agent = input.agentPrompt ? clip(input.agentPrompt, 4_000) : '';
   const rules = input.mode === 'plan'
     ? `${planInstructions()} Do not commit, push, create pull requests, access credentials, or modify files outside the repository.`
-    : `Inspect the repository, implement the requested change, and run relevant tests. Keep changes scoped. ${CI_RULES} Do not commit, push, create pull requests, access credentials, or modify files outside the repository. Finish with a concise summary of changes and actual test results.`;
+    : `Inspect the repository, implement the requested change, and run relevant tests. Keep changes scoped. ${CI_RULES} ${BLOCKED_RULE} Do not commit, push, create pull requests, access credentials, or modify files outside the repository. Finish with a concise summary of changes and actual test results.`;
   const epic = input.epic ? [
     `This ticket is part of epic #${input.epic.number}: ${input.epic.title}. Stay within this ticket's scope; sibling tickets cover the rest.`,
     clip(input.epic.body ?? '', 4_000),

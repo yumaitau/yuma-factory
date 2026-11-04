@@ -1335,9 +1335,11 @@ async function run() {
       } else if (!existingBranch && !(await publishChanges())) {
         // The agent says it could not do the work, not that it is done: no adversarial check to spend.
         // The wording keeps run-retry.ts's one fresh attempt, which has found workarounds before.
-        const blocked = await blockedReason();
+        // Agent text must not choose the retry policy: run-retry.ts classifies on these phrases, so the
+        // agent's reason is stripped of them and the classifying phrase ends the message, after it.
+        const blocked = (await blockedReason())?.replace(/GitHub did not run CI jobs|produced no file changes|Planner (?:did not|returned)/gi, "[…]").slice(0, 600);
         if (blocked)
-          throw Object.assign(new Error(`${agentName} produced no file changes and reported it could not do this ticket: ${blocked} Close the issue if the work is already done, or move it to Needs preparation to retry.`), { retryable: false });
+          throw Object.assign(new Error(`${agentName} reported it could not do this ticket: ${blocked} ${agentName} produced no file changes. Close the issue if the work is already done, or move it to Needs preparation to retry.`), { retryable: false });
         await closeIfAlreadyDone(summary);
         alreadyDone = true;
       } else {

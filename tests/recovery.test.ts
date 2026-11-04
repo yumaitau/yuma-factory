@@ -382,3 +382,31 @@ test('a run that keeps failing restarts at most three times, then fails for Fact
   assert.equal(started, MAX_RUNNER_RESTARTS);
   assert.ok(stopped > 0);
 });
+
+test('a lost container keeps the earlier log and names the cause when restarts run out', async () => {
+  const f = fixture(1);
+  f.job().progress = { status: 'running', log: 'Cloned repository.\nRunning tests.' };
+  const lost = { inspect: async () => ({ running: false, result: null, progress: null }), start: async () => {}, pause: async () => {} };
+  let now = 1000;
+  for (let restart = 1; restart <= MAX_RUNNER_RESTARTS; restart++) {
+    await recoverJob(f.bucket, 'run', 'account', lost, now);
+    now = f.job().retryAt!;
+    await recoverJob(f.bucket, 'run', 'account', lost, now);
+  }
+  const result = await recoverJob(f.bucket, 'run', 'account', lost, now + 1);
+  assert.equal(result.status, 'failed');
+  // The first attempt's output and every restart survive, not only "Starting attempt 4".
+  assert.match(result.log, /^Cloned repository\.\nRunning tests\./);
+  assert.match(result.log, /Attempt 4 ended without a result: the runner process or its container was lost\./);
+  assert.match(result.log, /Starting attempt 4;[\s\S]*Stopped after 3 automatic restarts/);
+});
+
+test('a failed start records why it failed', async () => {
+  const f = fixture(0);
+  await recoverJob(f.bucket, 'run', 'account', {
+    inspect: async () => ({ running: false, result: null, progress: null }),
+    start: async () => { throw new Error('GitHub credential renewal unavailable (503).'); },
+    pause: async () => {},
+  }, 1000);
+  assert.match(f.job().progress?.log ?? '', /Starting attempt 1;[^\n]*\nRunner\/account\/GitHub unavailable \(GitHub credential renewal unavailable \(503\)\.\)/);
+});

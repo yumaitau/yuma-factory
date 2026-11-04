@@ -187,7 +187,7 @@ async function renewGithub(env: Env, id: string, accountId: string, resume = fal
     body: JSON.stringify({ id, accountId, action: resume ? "resume" : "renew" }),
     signal: AbortSignal.timeout(30_000),
   });
-  if (!response.ok) throw new Error("GitHub credential renewal unavailable.");
+  if (!response.ok) throw new Error(`GitHub credential renewal unavailable (${response.status}).`);
   return response.json<{ token: string; issuedAt: number; runToken?: string; mergeToken?: string }>();
 }
 async function recover(env: Env, id: string, accountId: string, cancel = false) {

@@ -174,6 +174,20 @@ export function alreadyDonePrompt({ task, claim }) {
 }
 
 /**
+ * One reviewer or verifier session and its verdict. Processes left by earlier work are stopped before the
+ * session, and the verdict is read before any further command runs as the agent user: the checkout's Git
+ * config, hooks and filters belong to the agent whose work is being judged.
+ */
+export async function judged({ stop, clear, run, read, restore }) {
+  await stop();
+  await clear();
+  await run();
+  const verdict = await read();
+  await restore();
+  return verdict;
+}
+
+/**
  * Review, fix the blocking findings, and review again, at most MAX_REVIEW_FIXES times.
  * verdict: clean (nothing blocking), blocked (only work waiting on other issues remains), unresolved
  * (blocking findings remain), or missing (no usable review). waits: blocked findings from every round.

@@ -112,6 +112,11 @@ jobs:
         PREVIOUS_VERSION: ${{ steps.previous.outputs.version }}
       run: pnpm exec wrangler rollback "$PREVIOUS_VERSION" --name yuma-factory --message "Automatic rollback of ${GITHUB_SHA:0:7} after a failed smoke test" -y
   sandbox:
+    # The runner's scripts are only tested by the root suite in `deploy`, and must not ship ahead of D1 migrations.
+    needs: deploy
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -128,7 +133,15 @@ jobs:
         EVENT_NAME: ${{ github.event_name }}
         UPDATE_CONTAINER_IMAGE: ${{ inputs.update_container_image }}
         BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        GH_TOKEN: ${{ github.token }}
       run: |
+        if [ "$EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+          # A failed app job skips this job. Compare against the last successful
+          # release, not the previous push, so its pending runner changes survive.
+          # GitHub records the release SHA only after both jobs have succeeded.
+          BASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cloudflare-deploy.yml/runs?branch=main&status=success&per_page=100" \
+            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].head_sha // empty')
+        fi
         # Web-only releases must not restart containers running customer jobs.
         if [ "$EVENT_NAME" = workflow_dispatch ] || [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
           echo 'changed=true' >> "$GITHUB_OUTPUT"

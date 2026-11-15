@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { accountLeases, agents, codexAccounts, runs, tickets } from "@/db/schema";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/ids";
@@ -23,13 +23,15 @@ import { parsePlan } from '@/lib/plan';
 import { recordPrompt } from '@/lib/run-activities';
 import { ACTIVITY_LIMITS } from '@/lib/run-session';
 import { failureKind, type RetryRequest } from '@/lib/run-retry';
+import { logFailure } from '@/lib/failure-log';
 
 export async function startCodexRun(
   ticketId: string,
   agentId: string,
   modelId: string,
   userId: string,
-  options?: { automationLabel: string; automationLeaseId: string },
+  // withholdEpicText: the epic changed after it was approved for planning, so its text stays out of the prompt.
+  options?: { automationLabel: string; automationLeaseId: string; withholdEpicText?: boolean },
   // A follow-up continues a finished run: same ticket, its branch and PR when still open, plus the prompt.
   followUp?: { parentRunId: string; branchName: string | null; prompt: string },
   // An automatic retry of a failed run: the same shape, with that run's failure in place of a prompt.
@@ -55,7 +57,7 @@ export async function startCodexRun(
   const prompt = buildRunPrompt({
     mode, issueNumber: context.ticket.githubIssueNumber, title: context.ticket.title, body: context.ticket.body,
     agentPrompt: agent.systemPrompt, memoryBlock: memory.block,
-    epic: epic?.epic, siblings: epic?.siblings, thread: epic?.thread,
+    epic: epic && (options?.withholdEpicText ? { ...epic.epic, title: null, body: null } : epic.epic), siblings: epic?.siblings, thread: epic?.thread,
     followUp: followUp && { body: followUp.prompt, continuing: !!followUp.branchName },
     retry: retry && { attempt: retry.attempt, failure: retry.failure, continuing: !!retry.branchName },
   });
@@ -95,6 +97,7 @@ export async function startCodexRun(
     // A timed-out dispatch may already be executing. Let polling/cron reconcile it
     // instead of releasing credentials for a second concurrent run.
     if (inserted && dispatched) {
+      logFailure('run dispatch', error, { runId });
       await db
         .update(runs)
         .set({ log: "Waiting for the runner to confirm startup." })
@@ -106,15 +109,8 @@ export async function startCodexRun(
   }
 }
 
-/** Poll durable sandbox jobs; no coding work depends on a request's waitUntil lifetime. */
-export async function refreshRuns(userId: string, timeoutMs = 120_000) {
-  const db = await getDb();
-  await reconcileAbandonedClaims(db);
-  const active = await db
-    .select()
-    .from(runs)
-    .where(and(eq(runs.requestedByUserId, userId), eq(runs.status, "running")))
-    .all();
+/** Ask the runner about each run and record what it says. One run's failure never stops the others. */
+async function pollRuns(db: Awaited<ReturnType<typeof getDb>>, active: (typeof runs.$inferSelect)[], timeoutMs: number) {
   await forEachConcurrent(active, 4, async (run) => {
     if (!run.codexAccountId) return;
     let result: RunResult;
@@ -123,9 +119,11 @@ export async function refreshRuns(userId: string, timeoutMs = 120_000) {
         `/runs/${run.id}?accountId=${run.codexAccountId}`,
         'GET', undefined, timeoutMs,
       );
-    } catch {
+    } catch (error) {
+      // Transient runner failure must not release an executing subscription.
+      logFailure('run poll', error, { runId: run.id });
       return;
-    } // Transient runner failure must not release an executing subscription.
+    }
     if (result.status === "running") {
       if (result.log) await db.update(runs).set({
         log: result.log.slice(-100000),
@@ -135,12 +133,25 @@ export async function refreshRuns(userId: string, timeoutMs = 120_000) {
     }
     try {
       await completeCodexRun(run.id, result);
-    } catch {
+    } catch (error) {
       // One failing completion must not block polling of the other runs;
       // the runner callback and the next check retry it.
+      logFailure('run completion', error, { runId: run.id });
       return;
     }
   });
+}
+
+/** Poll durable sandbox jobs; no coding work depends on a request's waitUntil lifetime. */
+export async function refreshRuns(userId: string, timeoutMs = 120_000) {
+  const db = await getDb();
+  await reconcileAbandonedClaims(db);
+  const active = await db
+    .select()
+    .from(runs)
+    .where(and(eq(runs.requestedByUserId, userId), eq(runs.status, "running")))
+    .all();
+  await pollRuns(db, active, timeoutMs);
   return db
     .select({
       id: runs.id,
@@ -156,6 +167,17 @@ export async function refreshRuns(userId: string, timeoutMs = 120_000) {
     .orderBy(desc(runs.createdAt))
     .limit(100)
     .all();
+}
+
+/**
+ * The scheduled check polls every running run, oldest first, whoever started it. A run whose dispatch never
+ * reached the runner has no job there to call back, so nothing else would end it or free its subscription.
+ */
+export async function refreshAllRuns(timeoutMs = 20_000, limit = 40) {
+  const db = await getDb();
+  await reconcileAbandonedClaims(db);
+  const active = await db.select().from(runs).where(eq(runs.status, "running")).orderBy(asc(runs.createdAt)).limit(limit).all();
+  await pollRuns(db, active, timeoutMs);
 }
 
 export async function completeCodexRun(runId: string, result: RunResult) {

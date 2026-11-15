@@ -19,7 +19,7 @@ import { createMemory, listMemories, memoriesForTicket, memoryHistory, revertMem
 import { applyPlan, listPlans, postThreadMessage, rejectPlan, threadMessages } from '@/lib/collab-store';
 import { outstandingPullRequests } from '@/lib/work-review-query';
 import { desc, eq } from 'drizzle-orm';
-import { memories, memoryEvents, runs } from '@/db/schema';
+import { memories, memoryEvents, runs, users } from '@/db/schema';
 import { FACTORY_OPERATIONS } from '@/lib/factory-catalog';
 import {
   NotFoundError, acceptRunReview, createTicket, mergeRunReview, moveWorkCard, refreshRepos, retryAttention, setAutomationEnabled, setAutomationSize,
@@ -170,6 +170,9 @@ export async function runFactoryOperation(id: string, args: Record<string, unkno
     case 'previewDigest':
       return previewDigest();
     case 'sendDigest':
+      // A forced send skips the once-a-day limit, so a person must answer for it.
+      if (args.force === true && !actor.userId)
+        throw new FactoryApiError(403, 'Forcing the digest acts as a person. Use a personal API key from Settings, not the shared FACTORY_API_KEY.');
       return sendOutstandingDigest({ force: args.force === true });
     case 'listMemories': {
       const projectId = stringArg(args, 'projectId');
@@ -229,9 +232,14 @@ export async function runFactoryOperation(id: string, args: Record<string, unkno
     case 'postMessage': {
       const ticketId = stringArg(args, 'ticketId');
       if (!ticketId) throw new FactoryApiError(400, 'ticketId is required.');
-      return userError(async () => ({ id: await postThreadMessage(await getDb(), {
-        threadTicketId: ticketId, kind: 'human', body: String(args.body ?? ''), author: 'API',
-      }) }));
+      // Team guidance is posted on GitHub and read by agents as coming from the team, so it carries a person's name.
+      return userError(async () => {
+        const db = await getDb();
+        const person = await db.select({ name: users.name }).from(users).where(eq(users.id, userId)).get();
+        return { id: await postThreadMessage(db, {
+          threadTicketId: ticketId, kind: 'human', body: String(args.body ?? ''), userId, author: person?.name?.trim() || 'a team member',
+        }) };
+      });
     }
     case 'listRuns': {
       const ticketId = idArg(args, 'ticketId');

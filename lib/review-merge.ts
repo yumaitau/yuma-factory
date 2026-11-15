@@ -33,6 +33,15 @@ export async function reviewContext(db: Db, runId: string, pullRequestUrl?: stri
   return { ...row, owner, repo, pullNumber: ref.number, pullRequestUrl: url! };
 }
 
+/**
+ * Whether a pull request is one this run published: its head is the run's branch, or a default-branch repair
+ * branch the run opened after its merge (`<branch>-main-<n>`), in the project's own repository, never a fork.
+ */
+export function runOwnsPull(branchName: string | null, repoFullName: string, head: { ref?: string | null; repo?: { full_name?: string | null } | null } | null | undefined) {
+  if (!branchName || typeof head?.ref !== 'string' || head.repo?.full_name?.toLowerCase() !== repoFullName.toLowerCase()) return false;
+  return head.ref === branchName || (head.ref.startsWith(`${branchName}-main-`) && /^\d+$/.test(head.ref.slice(branchName.length + 6)));
+}
+
 /** GitHub's current view of the pull request. Every decision is made against this head, never a cached one. */
 export async function livePull(client: Client, context: ReviewContext): Promise<PullState> {
   const { data } = await client.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {

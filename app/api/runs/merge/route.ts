@@ -5,7 +5,7 @@ import { getEnv } from '@/lib/env';
 import { bearerToken } from '@/lib/factory-auth';
 import { getGithubApp } from '@/lib/github';
 import { runIdFromMergeToken } from '@/lib/run-token';
-import { factoryMerge, reviewContext } from '@/lib/review-merge';
+import { factoryMerge, reviewContext, runOwnsPull } from '@/lib/review-merge';
 
 const noStore = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 
@@ -28,6 +28,12 @@ export async function POST(request: Request) {
   if (!context) return noStore({ error: 'Pull request does not belong to this run.' }, 400);
   try {
     const client = await getGithubApp().getInstallationOctokit(context.installationId);
+    // A run may only merge a pull request it published: any other one in the repository is refused before anything is recorded.
+    const { data: pull } = await client.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: context.owner, repo: context.repo, pull_number: context.pullNumber, request: { signal: AbortSignal.timeout(15_000) },
+    });
+    if (!runOwnsPull(context.run.branchName, context.project.repoFullName, pull.head))
+      return noStore({ error: 'Pull request does not belong to this run.' }, 400);
     const { event } = await factoryMerge(db, client, context, body.sha);
     if (event.status === 'refused') return noStore({ error: `${event.message ?? 'PR head changed before merge.'} Ticket left open.` }, 409);
     if (event.status === 'merged' && event.headSha !== body.sha) return noStore({ error: 'PR merged at a different head. Ticket left open.' }, 409);

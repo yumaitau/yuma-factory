@@ -9,7 +9,7 @@ import { epicContext, postThreadMessage, threadMessages } from '@/lib/collab-sto
 import { MEMORY_KINDS } from '@/lib/memory';
 import { captureLearnings, memoriesForTicket } from '@/lib/memory-store';
 import { getTicketWithContext } from '@/lib/queries';
-import { runIdFromToken } from '@/lib/run-token';
+import { runIdFromAgentToken } from '@/lib/run-token';
 
 // Per-run caps keep a confused or prompt-injected agent from flooding shared state.
 export const RUN_CHANNEL_LIMITS = { proposals: 10, posts: 8 };
@@ -35,7 +35,7 @@ const noStore = (data: unknown, status = 200) => Response.json(data, { status, h
 
 /** Resolve the calling run from its bearer token. Tokens stop working the moment the run finishes. */
 async function authenticate(request: Request) {
-  const runId = runIdFromToken(bearerToken(request), getEnv().SANDBOX_RUNNER_SECRET);
+  const runId = runIdFromAgentToken(bearerToken(request), getEnv().SANDBOX_RUNNER_SECRET);
   if (!runId) return null;
   const db = await getDb();
   const run = await db.select().from(runs).where(and(eq(runs.id, runId), eq(runs.status, 'running'))).get();

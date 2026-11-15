@@ -5,7 +5,7 @@ import { agents, automation, githubInstallations, projects, tickets } from '@/db
 import { getDb } from '@/lib/db';
 import { getGithubApp } from '@/lib/github';
 import { newId } from '@/lib/ids';
-import { startCodexRun, refreshRuns } from '@/lib/agent/run';
+import { startCodexRun, refreshAllRuns } from '@/lib/agent/run';
 import { AUTOMATION_ID, automationCandidates, claimAutomation, ensureAutomationAgents } from '@/lib/automation-state';
 import { availableSlots } from '@/lib/codex/accounts';
 import { dispatchAssignments, forEachConcurrent } from '@/lib/concurrency';
@@ -15,6 +15,7 @@ import { approvalHistory, staleApproval } from '@/lib/approval';
 import { syncPullRequests } from '@/lib/pull-request-sync';
 import { retryFrom } from '@/lib/run-retry';
 import { openBlockers } from '@/lib/issue-dependencies';
+import { logFailure } from '@/lib/failure-log';
 
 /** One durable lease covers cron and manual checks. Interrupted checks can resume after expiry. */
 export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' = 'pickup') {
@@ -40,9 +41,14 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
   const held = () => and(eq(automation.id, AUTOMATION_ID), eq(automation.leaseId, leaseId));
   const stillEnabled = async () => !!(await db.select({ id: automation.id }).from(automation)
     .where(and(held(), eq(automation.enabled, true))).get());
+  // A step that fails must not stop the check, but it is logged and shown with the check's errors.
+  const survive = (step: string) => (error: unknown) => {
+    logFailure(step, error);
+    errors.push(`${step[0].toUpperCase()}${step.slice(1)} failed; it will retry next check.`);
+  };
   try {
     const pool = await ensureAutomationAgents(db, settings);
-    await refreshRuns(settings.userId, 20_000);
+    await refreshAllRuns(20_000);
     const app = getGithubApp();
     const clients = new Map<number, ReturnType<typeof app.getInstallationOctokit>>();
     const clientFor = async (id: number) => {
@@ -123,9 +129,9 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
     });
 
     if (await stillEnabled()) {
-      if (mode === 'sync') await syncPullRequests(db, clientFor, syncDeadline + 60_000).catch(() => {});
-      await resumeStalePlans(db).catch(() => {});
-      await reconcileEpics(db).catch(() => {});
+      if (mode === 'sync') await syncPullRequests(db, clientFor, syncDeadline + 60_000).catch(survive('pull request sync'));
+      await resumeStalePlans(db).catch(survive('plan resume'));
+      await reconcileEpics(db).catch(survive('epic reconciliation'));
       // Refresh agent state after reconciliation; never reuse the pre-check snapshot.
       const idle = await db.select().from(agents).where(and(eq(agents.ownerUserId, settings.userId),
         eq(agents.status, 'idle'), sql`${agents.automationSlot} between 1 and ${settings.targetAgents}`)).all();
@@ -157,8 +163,14 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
             if (stale) throw new Error(`${project.repoFullName}#${ticket.githubIssueNumber}: ${stale}`);
             // Work built on unmerged issues only fails review; the board shows the wait instead.
             if ((await openBlockers(db, client, owner, repo, ticket, data)).length) return false;
+            // A subtask's prompt carries its epic's text. The plan label approved that text as it was then; if someone
+            // else changed it since, or its history cannot be read, the run still starts but the epic's text is left out.
+            const epic = ticket.parentTicketId
+              ? await db.select({ number: tickets.githubIssueNumber }).from(tickets).where(eq(tickets.id, ticket.parentTicketId)).get() : null;
+            const withholdEpicText = !!epic && await approvalHistory(client.graphql, owner, repo, epic.number)
+              .then((history) => !!staleApproval(history, [LABELS.plan]), () => true);
             await startCodexRun(ticket.id, agent.id, agent.modelId ?? 'codex-default', settings.userId,
-              { automationLabel: settings.label, automationLeaseId: leaseId }, undefined, retryOf ? retryFrom(retryOf) : undefined);
+              { automationLabel: settings.label, automationLeaseId: leaseId, withholdEpicText }, undefined, retryOf ? retryFrom(retryOf) : undefined);
             runsStarted++;
             await db.update(automation).set({ runsStarted: sql`${automation.runsStarted} + 1`, updatedAt: new Date() }).where(held()).catch(() => {});
             return true;
@@ -174,7 +186,8 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
         : 'Eligible tickets remain queued for the next check.';
       if (dispatchErrors.length) errors.push(...dispatchErrors);
     }
-  } catch {
+  } catch (error) {
+    logFailure('automation check', error);
     errors.push('Worker check failed. Check GitHub/runner configuration and Worker logs.');
     summary = 'Check failed; next scheduled check will retry.';
   } finally {

@@ -83,7 +83,7 @@ Authenticate with `Authorization: Bearer <key>`. Create a personal key on **API 
 { "mcpServers": { "factory": { "type": "http", "url": "https://<factory>/api/mcp", "headers": { "Authorization": "Bearer fk_…" } } } }
 ```
 
-Keys are shown once, stored as SHA-256 digests, expire after 90 days, stop working when their owner may no longer sign in, and can be revoked at any time. They are created only in the app, never over the API. Calls that change anything need a bearer key; a browser session can only read, and cross-origin browser requests are refused. The shared `FACTORY_API_KEY` still works for read-only operations, memory, plans and the digest; operations marked `person` in the catalog need a personal key or a session. MCP tools are named `factory_*` and map one-to-one to the `/api/v1` routes.
+Keys are shown once, stored as SHA-256 digests, expire after 90 days, stop working when their owner may no longer sign in, and can be revoked at any time. They are created only in the app, never over the API. Calls that change anything need a bearer key; a browser session can only read, and cross-origin browser requests are refused. The shared `FACTORY_API_KEY` still works for read-only operations, memory, plans and the daily digest. Operations marked `person` in the catalog, which include posting team guidance to an epic thread, need a personal key or a session, and forcing an extra digest needs a personal key. One MCP request may batch at most 20 messages. MCP tools are named `factory_*` and map one-to-one to the `/api/v1` routes.
 
 ## Architecture
 

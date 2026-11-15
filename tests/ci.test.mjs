@@ -342,6 +342,31 @@ test("repairs that change nothing stop the run; a pushed repair resets the count
   assert.equal(repairs, 3 + MAX_IDLE_REPAIRS);
 });
 
+test("main pipeline repairs that change nothing stop the run; a re-run does not use up the count", async () => {
+  let repairs = 0;
+  const error = await finishCommitCI({
+    snapshot: async () => ({ state: "failed", sha: "m" }),
+    repair: async () => { repairs++; return false; },
+    done: async () => assert.fail("closed"),
+    progress: async () => {}, wait: async () => {},
+  }).catch((e) => e);
+  assert.match(error.message, /Main pipeline still failing after 3 repairs that changed nothing/);
+  assert.doesNotMatch(error.message, /GitHub did not run CI jobs|produced no file changes/);
+  assert.equal(error.retryable, false);
+  assert.equal(repairs, MAX_IDLE_REPAIRS);
+
+  // failed, failed, then jobs re-run (pending), then failed three more times: five repairs, not three.
+  const states = ["failed", "failed", "pending", "failed", "failed", "failed"];
+  repairs = 0;
+  await assert.rejects(finishCommitCI({
+    snapshot: async () => ({ state: states.shift() ?? "failed", sha: "m" }),
+    repair: async () => { repairs++; return false; },
+    done: async () => assert.fail("closed"),
+    progress: async () => {}, wait: async () => {},
+  }), /repairs that changed nothing/);
+  assert.equal(repairs, 2 + MAX_IDLE_REPAIRS);
+});
+
 test("GitHub billing, budget and quota blocks are recognised only when the job's steps agree", () => {
   const notStarted = "The job was not started because recent account payments have failed or your spending limit needs to be increased.";
   assert.match(githubBlockReason(notStarted, []), /billing/);

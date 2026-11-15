@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { findExistingRun } from "./resume.mjs";
+import { SAFE_GIT, loginTokens, readAgentFile } from "./agent-files.mjs";
 import { createGithub } from "./github-api.mjs";
 import { evaluateCI, finishCommitCI, githubBlockReason, isCiConfigPath, finishWithGreenCI, isLowRisk, isPassingConclusion, labelNames, latestWorkflows, loadRequiredChecks, requestFactoryMerge } from "./ci.mjs";
 import { spawn } from "node:child_process";
@@ -8,7 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { agentPlan, claudeActivities, claudeLimits, claudeOutput, codexActivity, executionOutput, jsonLines, liveProcesses, redactOutput } from "./output.mjs";
 import { startProxy } from "./workers-ai.mjs";
 import { CHECK_TIMEOUT_MS, MAX_CHECK_FIXES, checkFixPrompt, checkNames, checkPlan, failureOutput, newFailures, withRemovedChecks } from "./checks.mjs";
-import { MAX_REVIEW_FIXES, alreadyDonePrompt, fixPrompt, formatFindings, isBlockedOnIssues, isBlocking, isDependencyBump, parseFindings, repairTask, reviewPrompt, reviewUntilClean } from "./review.mjs";
+import { MAX_REVIEW_FIXES, alreadyDonePrompt, fixPrompt, formatFindings, isBlockedOnIssues, isBlocking, isDependencyBump, judged, parseFindings, repairTask, reviewPrompt, reviewUntilClean } from "./review.mjs";
 
 const root = "/factory";
 const home = "/home/factory/.codex";
@@ -362,9 +363,7 @@ async function run() {
   const proxy = workersAi ? await startWorkersAi(workersAi) : null;
   const rememberTokens = async () => {
     try {
-      const auth = JSON.parse(await fs.readFile(`${home}/auth.json`, "utf8"));
-      for (const value of Object.values(auth.tokens ?? {}))
-        if (typeof value === "string" && value.length > 8) sensitive.add(value);
+      for (const value of loginTokens(JSON.parse(await readAgentFile(`${home}/auth.json`)))) sensitive.add(value);
     } catch {}
   };
   await rememberTokens();
@@ -689,7 +688,7 @@ async function run() {
       }
       await rememberTokens();
       const summary = redact(
-        claude ? claudeSummary : await fs.readFile("/workspace/summary.txt", "utf8"),
+        claude ? claudeSummary : await readAgentFile("/workspace/summary.txt", 1_000_000),
       ).slice(0, 16000);
       appendLog(summary);
       // Reviewers and verifiers see the task's notes instructions as context; only the author's notes count.
@@ -723,7 +722,7 @@ async function run() {
         uid: 10001,
         gid: 10001,
       };
-      const agentGit = (args, options = {}) => command("git", ["-C", work, ...args], { ...agentOptions, ...options });
+      const agentGit = (args, options = {}) => command("git", ["-C", work, ...SAFE_GIT, ...args], { ...agentOptions, ...options });
       /** The checkout's current content as a tree id, untracked files included. */
       const workTree = async () => {
         await agentGit(["add", "-A"]);
@@ -783,10 +782,14 @@ async function run() {
             lastReviewed = tree;
             const diffFile = `${reviewDir}/changes.diff`;
             await fs.writeFile(diffFile, redact(await treeDiff(reviewedTree, tree, ["--text"])), { mode: 0o644 });
-            await readAgentJson("review");
-            await execute(reviewPrompt({ task: reviewTask, diffFile, previous, response }), { notes: false });
-            await restoreTree(tree);
-            return parseFindings(await readAgentJson("review"), req.issueNumber);
+            const verdict = await judged({
+              stop: stopAgentProcesses,
+              clear: () => readAgentJson("review"),
+              run: () => execute(reviewPrompt({ task: reviewTask, diffFile, previous, response }), { notes: false }),
+              read: () => readAgentJson("review"),
+              restore: () => restoreTree(tree),
+            });
+            return parseFindings(verdict, req.issueNumber);
           },
           fix: (findings) => execute(fixPrompt(reviewTask, findings), { notes: false }),
         });
@@ -807,6 +810,9 @@ async function run() {
             : `The adversarial review still reports these problems after ${MAX_REVIEW_FIXES} fix passes:\n${formatFindings(outcome.findings.filter(isBlocking))}`) + waitNote;
           await progress(`${concerns}\nPushing for human review; automatic merge is off for this ticket.`);
         }
+        // Reviewer text is posted to the issue and the PR; it may quote a credential the reviewer could read.
+        reviewNote = redact(reviewNote);
+        if (concerns) concerns = redact(concerns);
         // A blocking verdict after the last fix pass means its fixes were never reviewed: publish the reviewed tree.
         if ((await workTree()) !== lastReviewed) await agentGit(["read-tree", "-u", "--reset", lastReviewed]);
         return { tree: lastReviewed, concerns };
@@ -1107,10 +1113,13 @@ async function run() {
       const closeIfAlreadyDone = async (claim) => {
         await progress(`${agentName} made no changes. An adversarial check is verifying that the work is already done.`);
         const tree = await workTree();
-        await readAgentJson("verdict");
-        await execute(alreadyDonePrompt({ task: req.prompt, claim }), { notes: false });
-        await restoreTree(tree);
-        const verdict = await readAgentJson("verdict");
+        const verdict = await judged({
+          stop: stopAgentProcesses,
+          clear: () => readAgentJson("verdict"),
+          run: () => execute(alreadyDonePrompt({ task: req.prompt, claim }), { notes: false }),
+          read: () => readAgentJson("verdict"),
+          restore: () => restoreTree(tree),
+        });
         const reason = typeof verdict?.reason === "string" ? redact(verdict.reason.trim().slice(0, 4000)) : "";
         if (verdict?.confirmed !== true || !reason)
           throw Object.assign(new Error(`${agentName} produced no file changes, and an adversarial check did not confirm the work is already done${reason ? `: ${reason}` : "."} Close the issue if the work is already done, or move it to Needs preparation to retry.`), { retryable: false });

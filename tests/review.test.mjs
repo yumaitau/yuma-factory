@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_REVIEW_FIXES, isBlocking, isDependencyBump, issueNumbers, parseFindings, repairTask, reviewPrompt, reviewUntilClean } from "../sandbox-runner/scripts/review.mjs";
+import { MAX_REVIEW_FIXES, isBlocking, isDependencyBump, issueNumbers, judged, parseFindings, repairTask, reviewPrompt, reviewUntilClean } from "../sandbox-runner/scripts/review.mjs";
 
 const diff = (path, ...lines) => `diff --git a/${path} b/${path}\nindex 1..2 100644\n--- a/${path}\n+++ b/${path}\n@@ -1,3 +1,3 @@\n ${"context"}\n${lines.join("\n")}\n`;
 
@@ -132,4 +132,14 @@ test("a CI repair's review sees the repair, so fixes to older failures are not r
   assert.match(task, /predate the ticket.*is in scope/);
   assert.match(reviewPrompt({ task, diffFile: "d" }), /repairs CI that failed/);
   assert.doesNotMatch(repairTask("t", []), /\(\)/);
+});
+
+test("a verdict is read before the checkout is restored, and stray processes are stopped before the session", async () => {
+  const order = [];
+  const step = (name, value) => async () => { order.push(name); return value; };
+  const verdict = await judged({ stop: step("stop"), clear: step("clear"), run: step("run"), read: step("read", { findings: [] }), restore: step("restore") });
+  assert.deepEqual(order, ["stop", "clear", "run", "read", "restore"]);
+  assert.deepEqual(verdict, { findings: [] });
+  // A checkout that cannot be restored still fails the run.
+  await assert.rejects(judged({ stop: step("s"), clear: step("c"), run: step("r"), read: step("v"), restore: async () => { throw new Error("The checkout changed after review. Ticket left open."); } }), /checkout changed/);
 });

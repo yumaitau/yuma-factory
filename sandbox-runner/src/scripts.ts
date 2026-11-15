@@ -1,3 +1,4 @@
+import agentFiles from "../scripts/agent-files.mjs";
 import bridge from "../scripts/bridge.mjs";
 import checks from "../scripts/checks.mjs";
 import ci from "../scripts/ci.mjs";
@@ -10,7 +11,7 @@ import workersAi from "../scripts/workers-ai.mjs";
 // Install only before a new process starts. Running jobs keep their own version.
 // Script-only deployments can then leave the container image and disk untouched.
 export async function installScripts(sb: { writeFile(path: string, content: string): Promise<unknown> }) {
-  for (const [name, source] of Object.entries({ bridge, checks, ci, "github-api": githubApi, output, resume, review, "workers-ai": workersAi })) {
+  for (const [name, source] of Object.entries({ "agent-files": agentFiles, bridge, checks, ci, "github-api": githubApi, output, resume, review, "workers-ai": workersAi })) {
     await sb.writeFile(`/opt/factory/${name}.mjs`, source);
   }
 }

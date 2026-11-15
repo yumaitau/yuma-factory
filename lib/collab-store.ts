@@ -222,14 +222,23 @@ export async function resumeStalePlans(db: Db) {
   for (const plan of stale) await applyPlan(db, plan.id, null).catch(() => {});
 }
 
-/** Link an issue imported by sync or webhook back to its plan, only within the plan's own project. */
-export async function planLinkForBody(db: Db, body: string | null | undefined, projectId: string) {
-  const planTask = planTaskFromBody(body);
+/**
+ * Link an issue imported by sync or webhook back to its plan, only within the plan's own project.
+ * Only issues the Factory App created are linked, and a plan task links to one issue.
+ */
+export async function planLinkForBody(db: Db, issue: { number: number; body?: string | null; user?: { type?: string } | null }, projectId: string) {
+  if (issue.user?.type !== 'Bot') return null;
+  const planTask = planTaskFromBody(issue.body);
   if (!planTask) return null;
   const plan = await db.select({ ticketId: plans.ticketId }).from(plans)
     .innerJoin(tickets, eq(plans.ticketId, tickets.id))
     .where(and(eq(plans.id, planTask.split(':')[0]), eq(tickets.projectId, projectId))).get();
-  return plan ? { planTask, parentTicketId: plan.ticketId } : null;
+  if (!plan) return null;
+  // tickets_plan_task_uidx allows one ticket per task; a second issue with the same marker is left unlinked.
+  const holder = await db.select({ projectId: tickets.projectId, number: tickets.githubIssueNumber }).from(tickets)
+    .where(eq(tickets.planTask, planTask)).get();
+  if (holder && (holder.projectId !== projectId || holder.number !== issue.number)) return null;
+  return { planTask, parentTicketId: plan.ticketId };
 }
 
 export async function rejectPlan(db: Db, planId: string, userId: string | null) {

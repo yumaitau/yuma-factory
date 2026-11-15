@@ -60,6 +60,7 @@ async function handleIssueEvent(payload: {
     html_url: string;
     labels: Array<string | { name?: string }>;
     pull_request?: unknown;
+    user?: { type?: string } | null;
   };
   repository: { id: number };
 }) {
@@ -81,7 +82,7 @@ async function handleIssueEvent(payload: {
   const now = new Date();
   const { newId } = await import('@/lib/ids');
   // Subtasks carry a plan marker, so one created just before a crash still joins its epic.
-  const link = await planLinkForBody(db, payload.issue.body, project.id);
+  const link = await planLinkForBody(db, payload.issue, project.id);
   await db.insert(tickets).values({
     id: newId('tkt'),
     projectId: project.id,

@@ -19,3 +19,5 @@ The PaperBoy digest also needs the `PAPERBOY_API_KEY` secret on `yuma-factory`; 
 ## Deploy
 
 Pushes to `main` run `.github/workflows/cloudflare-deploy.yml`, which tests, builds, applies D1 migrations and deploys both Workers with the shared organisation token. Runner deploys happen only when `sandbox-runner/` or `shared/` changes. The runner deploys after the app job succeeds, so a failed check, migration or smoke test also holds back the runner. Container image rollouts need a manual dispatch with `update_container_image`.
+
+Main pushes compare runner changes with the last successful release recorded by GitHub Actions, including successful manual dispatches. A failed release therefore keeps its runner changes pending for the next successful app deployment. If no successful release is available, the workflow conservatively deploys the runner; an unreadable release history fails the job.

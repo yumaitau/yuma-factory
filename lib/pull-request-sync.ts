@@ -36,7 +36,9 @@ export async function syncPullRequests(db: Db, clientFor: (installationId: numbe
       const state = pull.merged ? 'merged' : pull.state === 'closed' ? 'closed' : 'open';
       if (state === 'open' && pull.head?.sha)
         await syncHeadEvidence(db, client, { runId: run.id, ticketId: ticket.id, owner, repo: name, headSha: pull.head.sha, baseBranch: pull.base?.ref, updatedAt: pull.updated_at });
-      if (state === 'merged') {
+      // A ticket requeued or reopened since this run is new work: its old merged PR must not close it again.
+      const superseded = !!ticket.requeuedAt && ticket.requeuedAt > run.createdAt;
+      if (state === 'merged' && !superseded) {
         const labels = await markGithubIssueDone(client, owner, name, ticket.githubIssueNumber);
         await db.update(tickets).set({ stage: 'done', githubState: 'closed', labels: JSON.stringify(labels), updatedAt: new Date() })
           .where(and(eq(tickets.id, ticket.id), sql`not exists (select 1 from runs r where r.ticket_id = ${ticket.id} and r.status = 'running')`));

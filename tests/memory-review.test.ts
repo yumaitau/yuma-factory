@@ -42,9 +42,16 @@ test('by default a finished run suggests its lesson, and the next prompt leaves 
     // The reviewer can open the run and the ticket that produced it.
     assert.deepEqual(await memorySourceTickets(db, [memory!.sourceTicketId!]),
       [{ id: 'ticket', number: 1, title: 'Work', url: 'https://github.com/org/repo/issues/1' }]);
+    // The audit trail says a run learned it, with the starting weight.
+    assert.deepEqual((await events(db, memory!.id)).map((event) => [event.actor, event.action, event.after]), [['run:run-1', 'learned', '{"weight":20}']]);
+    // The same run saying it again is not rediscovery.
+    await learn(db, 'run-1');
+    assert.equal((await events(db, memory!.id)).length, 1);
     // Rediscovery by a later run reinforces it but does not activate it.
     await learn(db, 'run-2');
     assert.equal((await byContent(db))?.status, 'suggested');
+    assert.deepEqual((await events(db, memory!.id)).map((event) => [event.actor, event.action, event.after]),
+      [['run:run-1', 'learned', '{"weight":20}'], ['run:run-2', 'reinforced', '{"weight":25}']]);
   } finally { sqlite.close(); }
 });
 

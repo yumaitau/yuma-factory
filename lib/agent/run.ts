@@ -142,6 +142,9 @@ async function pollRuns(db: Awaited<ReturnType<typeof getDb>>, active: (typeof r
   });
 }
 
+/** Characters of each run's log that the status poll returns: up to 100 runs every 10 seconds per open tab. */
+export const STATUS_LOG_TAIL = 4_000;
+
 /** Poll durable sandbox jobs; no coding work depends on a request's waitUntil lifetime. */
 export async function refreshRuns(userId: string, timeoutMs = 120_000) {
   const db = await getDb();
@@ -157,7 +160,8 @@ export async function refreshRuns(userId: string, timeoutMs = 120_000) {
       id: runs.id,
       ticketId: runs.ticketId,
       status: runs.status,
-      log: runs.log,
+      // The end of each log is enough for this list; the issue panel streams a run's full output.
+      log: sql<string>`substr(${runs.log}, ${-STATUS_LOG_TAIL})`,
       pullRequestUrl: runs.pullRequestUrl,
       modelId: runs.modelId,
       codexAccountId: runs.codexAccountId,

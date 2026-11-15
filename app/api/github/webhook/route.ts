@@ -7,6 +7,7 @@ import { enqueuePickup } from '@/lib/automation-queue';
 import { LABELS } from '@/lib/brand';
 import { planLinkForBody } from '@/lib/collab-store';
 import { observePullHead } from '@/lib/review-evidence-store';
+import { reopenedTicket } from '@/lib/run-lifecycle';
 
 /**
  * GitHub App webhook receiver. Verifies the HMAC-SHA256 signature against
@@ -99,7 +100,9 @@ async function handleIssueEvent(payload: {
     updatedAt: now,
   }).onConflictDoUpdate({ target: [tickets.projectId, tickets.githubIssueNumber], set: {
     title: payload.issue.title, body: payload.issue.body, labels: JSON.stringify(labels),
-    githubState: payload.issue.state, htmlUrl: payload.issue.html_url, updatedAt: now,
+    githubState: sql`excluded.github_state`, htmlUrl: payload.issue.html_url, updatedAt: now,
+    // A finished ticket whose issue was reopened is work again.
+    ...reopenedTicket(now),
     // An established parent never changes on an edit.
     ...(link ? { parentTicketId: sql`coalesce(${tickets.parentTicketId}, ${link.parentTicketId})`, planTask: sql`coalesce(${tickets.planTask}, ${link.planTask})` } : {}),
   } });

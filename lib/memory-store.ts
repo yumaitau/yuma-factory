@@ -76,8 +76,9 @@ export async function captureLearnings(db: Db, input: { projectId: string; runId
         weight: sql`case when ${memories.source} = 'human' then ${memories.weight} else min(max(${memories.weight}, ${AGENT_MAX_WEIGHT}), ${memories.weight} + ${REINFORCE_STEP}) end`,
         updatedAt: now,
       },
-    }).returning({ id: memories.id, createdAt: memories.createdAt, weight: memories.weight });
-    if (row) await logEvent(db, row.id, `run:${input.runId}`, row.createdAt.getTime() === now.getTime() ? 'learned' : 'reinforced', undefined, { weight: row.weight });
+    }).returning({ id: memories.id, weight: memories.weight });
+    // `existing` was read before the write. Comparing stored times cannot tell: the column keeps whole seconds.
+    if (row) await logEvent(db, row.id, `run:${input.runId}`, existing ? 'reinforced' : 'learned', undefined, { weight: row.weight });
   }
   return learnings.length;
 }

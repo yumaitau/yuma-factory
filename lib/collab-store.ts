@@ -164,7 +164,7 @@ export async function applyPlan(db: Db, planId: string, userId: string | null) {
     if (plan.tasks.some((task) => !ticketByKey.has(task.key))) {
       for (const issue of await issuesSince(client, params, row.createdAt)) {
         // Only issues the Factory App created can be adopted as its subtasks.
-        const marker = issue.user?.type === 'Bot' ? planTaskFromBody(issue.body) : null;
+        const marker = isFactoryIssue(issue) ? planTaskFromBody(issue.body) : null;
         const task = plan.tasks.find((item) => marker === planTaskId(planId, item.key));
         if (task && !ticketByKey.has(task.key)) await saveSubtask(task, issue);
       }
@@ -192,7 +192,12 @@ export async function applyPlan(db: Db, planId: string, userId: string | null) {
   }
 }
 
-type GithubIssue = { id: number | bigint; number: number; title: string; body?: string | null; state: string; html_url: string; labels: unknown[]; pull_request?: unknown; user?: { type?: string } | null };
+type IssueAuthor = { user?: { type?: string; login?: string } | null };
+type GithubIssue = IssueAuthor & { id: number | bigint; number: number; title: string; body?: string | null; state: string; html_url: string; labels: unknown[]; pull_request?: unknown };
+
+export function isFactoryIssue(issue: IssueAuthor, appSlug = process.env.GITHUB_APP_SLUG?.trim()) {
+  return !!appSlug && issue.user?.type === 'Bot' && issue.user.login === `${appSlug}[bot]`;
+}
 
 function labelNames(labels: unknown[]) {
   return labels.map((label) => typeof label === 'string' ? label : (label as { name?: string } | null)?.name).filter((name): name is string => !!name);
@@ -222,14 +227,23 @@ export async function resumeStalePlans(db: Db) {
   for (const plan of stale) await applyPlan(db, plan.id, null).catch(() => {});
 }
 
-/** Link an issue imported by sync or webhook back to its plan, only within the plan's own project. */
-export async function planLinkForBody(db: Db, body: string | null | undefined, projectId: string) {
-  const planTask = planTaskFromBody(body);
+/**
+ * Link an issue imported by sync or webhook back to its plan, only within the plan's own project.
+ * Only issues the Factory App created are linked, and a plan task links to one issue.
+ */
+export async function planLinkForBody(db: Db, issue: IssueAuthor & { number: number; body?: string | null }, projectId: string) {
+  if (!isFactoryIssue(issue)) return null;
+  const planTask = planTaskFromBody(issue.body);
   if (!planTask) return null;
   const plan = await db.select({ ticketId: plans.ticketId }).from(plans)
     .innerJoin(tickets, eq(plans.ticketId, tickets.id))
     .where(and(eq(plans.id, planTask.split(':')[0]), eq(tickets.projectId, projectId))).get();
-  return plan ? { planTask, parentTicketId: plan.ticketId } : null;
+  if (!plan) return null;
+  // tickets_plan_task_uidx allows one ticket per task; a second issue with the same marker is left unlinked.
+  const holder = await db.select({ projectId: tickets.projectId, number: tickets.githubIssueNumber }).from(tickets)
+    .where(eq(tickets.planTask, planTask)).get();
+  if (holder && (holder.projectId !== projectId || holder.number !== issue.number)) return null;
+  return { planTask, parentTicketId: plan.ticketId };
 }
 
 export async function rejectPlan(db: Db, planId: string, userId: string | null) {

@@ -98,7 +98,7 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
             });
           }
           for (const issue of issues.filter((item) => item.body?.includes('factory-plan-task:'))) {
-            const link = await planLinkForBody(db, issue.body, project.id);
+            const link = await planLinkForBody(db, issue, project.id);
             if (link) await db.update(tickets).set(link)
               .where(and(eq(tickets.projectId, project.id), eq(tickets.githubIssueNumber, issue.number), sql`${tickets.planTask} is null`));
           }

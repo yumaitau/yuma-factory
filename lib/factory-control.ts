@@ -166,7 +166,8 @@ export async function applyWorkMove(card: WorkCard, lane: string) {
 
 /** A Work board drop. The lane is re-derived here, so the caller's view never decides the move. */
 export async function moveWorkCard(ticketId: string, lane: string) {
-  // One ticket's card, not the whole board.
+  // One ticket's card, not the whole board. An empty id would read as the whole board and move its first card.
+  if (!ticketId) throw new Error('This task is no longer on the Work board.');
   const [card] = await workBoardCards(ticketId, true);
   if (!card) throw new Error('This task is no longer on the Work board.');
   await applyWorkMove(card, lane);

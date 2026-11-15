@@ -76,9 +76,10 @@ export async function captureLearnings(db: Db, input: { projectId: string; runId
         weight: sql`case when ${memories.source} = 'human' then ${memories.weight} else min(max(${memories.weight}, ${AGENT_MAX_WEIGHT}), ${memories.weight} + ${REINFORCE_STEP}) end`,
         updatedAt: now,
       },
-    }).returning({ id: memories.id, weight: memories.weight });
-    // `existing` was read before the write. Comparing stored times cannot tell: the column keeps whole seconds.
-    if (row) await logEvent(db, row.id, `run:${input.runId}`, existing ? 'reinforced' : 'learned', undefined, { weight: row.weight });
+    }).returning({ id: memories.id, weight: memories.weight, sourceRunId: memories.sourceRunId });
+    // A conflict keeps the first writer's sourceRunId, so only a row this run inserted carries its id, even when
+    // two runs capture the same lesson at once. Comparing stored times cannot tell: the column keeps whole seconds.
+    if (row) await logEvent(db, row.id, `run:${input.runId}`, row.sourceRunId === input.runId ? 'learned' : 'reinforced', undefined, { weight: row.weight });
   }
   return learnings.length;
 }

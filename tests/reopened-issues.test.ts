@@ -106,3 +106,27 @@ test('the pull request sync does not close a reopened issue again over its old m
     assert.deepEqual(app.row("SELECT stage, github_state AS state FROM tickets WHERE id = 'ticket'"), { stage: 'assigned', state: 'open' });
   } finally { app.close(); }
 });
+
+test('an epic reopened after its plan was applied stays open while its subtasks are closed', async () => {
+  const app = factoryApp();
+  try {
+    const { reconcileEpics } = await import('../lib/collab-store');
+    app.github('PATCH /repos/org/repo/issues/1', { state: 'closed' });
+    // Epic #1 with an applied plan and one closed subtask, finished and closed.
+    app.sqlite.exec(`
+      INSERT INTO plans (id, ticket_id, run_id, status, summary, tasks_json, decided_at, created_at)
+        VALUES ('plan', 'ticket', 'plan-run', 'applied', 'One task', '[]', unixepoch() - 900, unixepoch() - 1000);
+      UPDATE tickets SET parent_ticket_id = 'ticket', github_state = 'closed' WHERE id = 'second';
+      UPDATE tickets SET stage = 'done', github_state = 'closed' WHERE id = 'ticket';
+    `);
+    assert.equal((await deliver('reopened', 'open', [])).status, 200);
+    await reconcileEpics(app.db);
+    assert.deepEqual(app.githubCalls().filter((call) => call.startsWith('PATCH')), []);
+    const epic = app.row("SELECT stage, github_state AS state FROM tickets WHERE id = 'ticket'");
+    assert.deepEqual([epic?.stage, epic?.state], ['intake', 'open']);
+    // An epic never reopened still closes once its subtasks are closed.
+    app.sqlite.exec("UPDATE tickets SET requeued_at = NULL WHERE id = 'ticket'");
+    await reconcileEpics(app.db);
+    assert.deepEqual(app.githubCalls().filter((call) => call.startsWith('PATCH')), ['PATCH /repos/org/repo/issues/1']);
+  } finally { app.close(); }
+});

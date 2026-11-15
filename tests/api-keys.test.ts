@@ -58,8 +58,8 @@ test('operations that act as a person refuse the shared key, and every MCP tool 
     'factory_get_memory_history', 'factory_revert_memory'])
     assert.ok(tools.includes(name), name);
   // Everything that changes state outside memory, plans and the digest needs a person.
-  for (const operation of FACTORY_OPERATIONS.filter((item) => item.mutating && !item.person))
-    assert.match(operation.id, /Pickup|Digest|Memory|Plan|Message/, operation.id);
+  assert.deepEqual(FACTORY_OPERATIONS.filter((item) => item.mutating && !item.person).map((item) => item.id).sort(),
+    ['approvePlan', 'createMemory', 'enqueuePickup', 'rejectPlan', 'revertMemory', 'sendDigest', 'updateMemory']);
 });
 
 test('new control tools reject bad input before touching GitHub or the database', async () => {

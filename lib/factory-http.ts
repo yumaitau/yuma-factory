@@ -4,7 +4,6 @@ import { FACTORY_OPERATIONS } from '@/lib/factory-catalog';
 import { bearerActor, bearerToken, crossOrigin } from '@/lib/factory-auth';
 import { FactoryApiError, runFactoryOperation } from '@/lib/factory-operations';
 import { factoryApiKey } from '@/lib/env';
-import { requireApiSession } from '@/lib/session';
 import { apiKeyOwner } from '@/lib/api-keys';
 import { getDb } from '@/lib/db';
 
@@ -27,6 +26,8 @@ export async function requireFactoryAccess(request: Request, auth: boolean, muta
   if (token) return bearerActor(token, async (key) => apiKeyOwner(await getDb(), key), factoryApiKey());
   if (!auth) return { ok: true as const, actor: { userId: null } };
   if (mutating) return { ok: false as const, response: noStore({ error: 'Changes need an API key: Authorization: Bearer <key>.' }, 401) };
+  // Loaded on demand: the session module needs Next's request scope, which bearer-token callers never reach.
+  const { requireApiSession } = await import('@/lib/session');
   const session = await requireApiSession();
   if (!session.ok) return session;
   return { ok: true as const, actor: { userId: session.session.user.id } };

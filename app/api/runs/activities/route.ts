@@ -9,7 +9,10 @@ import { ACTIVITY_LIMITS, normalizeActivity, parseRunPlan, type IncomingActivity
 
 const noStore = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 
-/** Runner -> app session channel, authenticated by the run token. Returns follow-ups when the runner can apply them. */
+/**
+ * Runner -> app session channel. Only the bridge's channel token is accepted: the agent's token is refused, so an
+ * agent cannot write the session timeline or take a teammate's queued follow-up. Returns follow-ups when the runner can apply them.
+ */
 export async function POST(request: Request) {
   const runId = runIdFromToken(bearerToken(request), getEnv().SANDBOX_RUNNER_SECRET);
   if (!runId) return noStore({ error: 'Run is not active.' }, 401);

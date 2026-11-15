@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { FAILURE_TAIL, MAX_AUTO_RETRIES, failureKind, failureTail, isFollowUp, nextRetry, retryDelayMs, retryFrom } from '../lib/run-retry';
 import { buildRunPrompt } from '../lib/run-prompt';
@@ -10,6 +9,7 @@ import { claimRun, moveTicket } from '../lib/run-lifecycle';
 import { automationCandidates } from '../lib/automation-state';
 import * as schema from '../db/schema';
 import { lifecycleDatabase } from './support/d1';
+import { RUNNER_SECRET, factoryApp, hexId, post } from './support/app';
 
 const failed = (log: string, extra: object = {}) => ({ status: 'failed' as const, log, ...extra });
 
@@ -48,13 +48,24 @@ test('runner failures that need a person are never retried; agent output failure
   assert.equal(failureKind(failed(`Codex produced no file changes.${'x'.repeat(FAILURE_TAIL)}\nBilling blocked.`, { retryable: false }), 'implement'), 'human');
 });
 
-test('the messages failureKind matches still exist in the runner', () => {
-  const runner = ['bridge.mjs', 'ci.mjs'].map((file) => readFileSync(new URL(`../sandbox-runner/scripts/${file}`, import.meta.url), 'utf8')).join('\n');
-  assert.match(runner, /produced no file changes/);
-  assert.match(runner, /CI still failing after \$\{MAX_IDLE_REPAIRS\} repairs that changed nothing/);
-  assert.match(runner, /Planner did not write a valid plan file/);
-  assert.match(runner, /GitHub did not run CI jobs: \$\{block\}/);
-  assert.match(readFileSync(new URL('../lib/agent/run.ts', import.meta.url), 'utf8'), /Planner returned an invalid proposal/);
+// The runner's own classified failures are exercised in tests/runner-flow.test.mjs; this is the app's.
+test('a planner run that returns an invalid proposal ends as planner output worth one more attempt', async () => {
+  const app = factoryApp();
+  try {
+    const run = hexId('run', '1');
+    app.sqlite.exec(`
+      UPDATE tickets SET labels = '["factory:plan"]', stage = 'in_progress' WHERE id = 'ticket';
+      INSERT INTO runs (id, ticket_id, agent_id, status, model_id, mode, created_at) VALUES ('${run}', 'ticket', 'worker', 'running', 'codex-default', 'plan', 1);
+    `);
+    const { POST } = await import('../app/api/codex/complete/route');
+    const response = await POST(post('/api/codex/complete', { id: run, result: { status: 'succeeded', log: 'Plan proposed with 0 subtasks.', plan: { summary: 'Nothing', tasks: [] } } },
+      { 'x-runner-secret': RUNNER_SECRET }));
+    assert.equal(response.status, 200);
+    const stored = app.row('SELECT status, failure_kind AS kind, log FROM runs');
+    assert.deepEqual([stored?.status, stored?.kind], ['failed', 'retry']);
+    assert.match(String(stored?.log), /Planner returned an invalid proposal: Plan has no tasks\./);
+    assert.equal(app.row('SELECT count(*) AS n FROM plans')?.n, 0);
+  } finally { app.close(); }
 });
 
 test('a failure gets three retries at 5, 20 and 60 minutes, so at most four attempts', () => {

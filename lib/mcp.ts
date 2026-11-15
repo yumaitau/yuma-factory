@@ -6,6 +6,8 @@ import { crossOrigin, type FactoryActor } from '@/lib/factory-auth';
 import { requireFactoryAccess } from '@/lib/factory-http';
 
 const PROTOCOL = '2025-03-26';
+// A batch runs its messages one after another in one request. Capped like the run channel (lib/run-mcp.ts).
+export const MCP_BATCH_LIMIT = 20;
 
 type Rpc = { jsonrpc?: string; id?: string | number | null; method?: string; params?: unknown };
 
@@ -48,9 +50,12 @@ export async function handleFactoryMcp(request: Request) {
   const body: unknown = await request.json().catch(() => null);
   if (!body || typeof body !== 'object') return noStore(rpcError(null, -32700, 'Parse error'), 400);
   const messages = Array.isArray(body) ? body : [body];
+  // Refused whole: running the first 20 of a longer batch would leave the caller guessing which changes happened.
+  if (messages.length > MCP_BATCH_LIMIT)
+    return noStore(rpcError(null, -32600, `A batch may hold at most ${MCP_BATCH_LIMIT} messages.`), 400);
   const responses = [];
   for (const raw of messages) {
-    const message = raw as Rpc;
+    const message = (raw && typeof raw === 'object' ? raw : {}) as Rpc;
     if (message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
       responses.push(rpcError(message.id ?? null, -32600, 'Invalid request'));
       continue;

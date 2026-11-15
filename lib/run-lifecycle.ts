@@ -72,6 +72,20 @@ export async function claimRun(db: Db, input: {
   return claimed.length > 0;
 }
 
+/**
+ * For the `set` of a ticket upsert that carries GitHub's state. An issue reopened on GitHub after Factory
+ * finished it comes back as fresh work, like a person's requeue: out of Integrated, with earlier attempts
+ * no longer deciding its lane or blocking pickup. Everything else keeps its stage.
+ */
+export function reopenedTicket(now = new Date()) {
+  const reopened = sql`excluded.github_state = 'open' and ${tickets.stage} = 'done'`;
+  return {
+    stage: sql`case when ${reopened} then (case when ${tickets.assignedAgentId} is null then 'intake' else 'assigned' end) else ${tickets.stage} end`,
+    // Strictly after every earlier attempt, as moveTicket does for a person's requeue.
+    requeuedAt: sql`case when ${reopened} then max(${Math.floor(now.getTime() / 1000)}, coalesce((select max(created_at) + 1 from runs where ticket_id = ${tickets.id}), 0)) else ${tickets.requeuedAt} end`,
+  };
+}
+
 export async function moveTicket(db: Db, ticketId: string, stage: TicketStage, requeue = false, now = new Date()) {
   if (stage === 'in_progress') throw new Error('Start a run to move this ticket into progress.');
   // Strictly exceed the failed attempt, even when retrying within its creation second.

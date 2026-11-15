@@ -274,6 +274,9 @@ export async function listPlans(db: Db, limit = 50) {
 export async function reconcileEpics(db: Db) {
   const epics = await db.select().from(tickets).where(and(eq(tickets.githubState, 'open'),
     sql`exists (select 1 from plans p where p.ticket_id = ${tickets.id} and p.status = 'applied')`,
+    // An epic reopened after its plan was decided is work again; closed subtasks no longer finish it.
+    sql`(${tickets.requeuedAt} is null or not exists (select 1 from plans p where p.ticket_id = ${tickets.id}
+      and p.status = 'applied' and coalesce(p.decided_at, p.created_at) < ${tickets.requeuedAt}))`,
     sql`not exists (select 1 from tickets child where child.parent_ticket_id = ${tickets.id} and child.github_state = 'open')`,
   )).limit(20).all();
   for (const epic of epics) {

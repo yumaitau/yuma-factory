@@ -36,10 +36,18 @@ export async function syncPullRequests(db: Db, clientFor: (installationId: numbe
       const state = pull.merged ? 'merged' : pull.state === 'closed' ? 'closed' : 'open';
       if (state === 'open' && pull.head?.sha)
         await syncHeadEvidence(db, client, { runId: run.id, ticketId: ticket.id, owner, repo: name, headSha: pull.head.sha, baseBranch: pull.base?.ref, updatedAt: pull.updated_at });
-      if (state === 'merged') {
+      // A ticket requeued or reopened since this run is new work: its old merged PR must not close it again.
+      // Re-read after the PR request: a requeue can land while it is in flight. The final update re-checks the same
+      // watermark, but a requeue between this read and GitHub's close can still leave the issue closed.
+      const current = state === 'merged'
+        ? await db.select({ requeuedAt: tickets.requeuedAt }).from(tickets).where(eq(tickets.id, ticket.id)).get() : undefined;
+      const requeuedAt = current?.requeuedAt ?? null;
+      const superseded = !!requeuedAt && requeuedAt > run.createdAt;
+      if (state === 'merged' && current && !superseded) {
         const labels = await markGithubIssueDone(client, owner, name, ticket.githubIssueNumber);
         await db.update(tickets).set({ stage: 'done', githubState: 'closed', labels: JSON.stringify(labels), updatedAt: new Date() })
-          .where(and(eq(tickets.id, ticket.id), sql`not exists (select 1 from runs r where r.ticket_id = ${ticket.id} and r.status = 'running')`));
+          .where(and(eq(tickets.id, ticket.id), requeuedAt ? eq(tickets.requeuedAt, requeuedAt) : isNull(tickets.requeuedAt),
+            sql`not exists (select 1 from runs r where r.ticket_id = ${ticket.id} and r.status = 'running')`));
       }
       await db.update(runs).set({ pullRequestState: state, pullRequestCheckedAt: new Date() }).where(eq(runs.id, run.id));
     } catch {

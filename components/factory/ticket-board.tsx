@@ -14,6 +14,7 @@ import { BoardCard, BoardColumn, BoardDnd } from "@/components/factory/board-dnd
 import { StatusIcon, type StatusKind } from "@/components/factory/status-icon";
 import { IssuePanel, issueLinkProps, openIssue } from "@/components/factory/issue-panel";
 import { stageMoveError } from "@/lib/board-moves";
+import { singleFlight } from "@/lib/poll";
 import { factoryRisk, parseRiskLabel, ticketRisk, TICKET_RISKS } from "@/shared/ticket-risk";
 import { LABEL_PREFIX } from "@/lib/brand";
 
@@ -78,18 +79,16 @@ export function TicketBoard({
     }[]
   >([]);
   useEffect(() => {
-    const refresh = () => {
-      void fetch("/api/codex/status")
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (data) {
-            setRunRows((data as { runs: typeof runRows }).runs);
-            // A refresh mid-drag would move cards under the pointer.
-            if (!dragging.current) router.refresh();
-          }
-        })
-        .catch(() => {});
-    };
+    // The status route polls the runner and can take longer than the interval; never stack requests.
+    const poll = singleFlight(async () => {
+      const response = await fetch("/api/codex/status");
+      const data: unknown = response.ok ? await response.json() : null;
+      if (!data) return;
+      setRunRows((data as { runs: typeof runRows }).runs);
+      // A refresh mid-drag would move cards under the pointer.
+      if (!dragging.current) router.refresh();
+    });
+    const refresh = () => { void poll().catch(() => {}); };
     refresh();
     const timer = setInterval(refresh, 10000);
     return () => clearInterval(timer);

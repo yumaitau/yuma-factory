@@ -16,6 +16,7 @@ import { syncPullRequests } from '@/lib/pull-request-sync';
 import { retryFrom } from '@/lib/run-retry';
 import { openBlockers } from '@/lib/issue-dependencies';
 import { logFailure } from '@/lib/failure-log';
+import { reopenedTicket } from '@/lib/run-lifecycle';
 
 /** One durable lease covers cron and manual checks. Interrupted checks can resume after expiry. */
 export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' = 'pickup') {
@@ -100,6 +101,8 @@ export async function runAutomation(scheduledAt?: Date, mode: 'sync' | 'pickup' 
               set: {
                 title: sql`excluded.title`, body: sql`excluded.body`, labels: sql`excluded.labels`,
                 githubState: sql`excluded.github_state`, htmlUrl: sql`excluded.html_url`, updatedAt: started,
+                // The webhook can miss a reopen; the sync catches it.
+                ...reopenedTicket(started),
               },
             });
           }

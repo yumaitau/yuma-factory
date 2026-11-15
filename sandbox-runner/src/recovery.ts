@@ -125,13 +125,17 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
     // The sandbox is stopped first: the subscription must not be released while code could still run.
     const endStartOutage = async (cause: string, stopped: boolean): Promise<RunResult | null> => {
       if (job.startFailingSince === undefined || now - job.startFailingSince < MAX_START_FAILURE_MS) return null;
+      const failed: RunResult = { ...job.progress, status: 'failed',
+        log: withLine(job.progress?.log, `${cause}. Starts kept failing for ${Math.round((now - job.startFailingSince) / 3_600_000)} hours. Existing branch and PR preserved.`) };
       if (!stopped) {
         if (!ops.pause) return null;
-        // A stop that fails keeps the job; the next poll tries again.
+        // Persist the decision first: a stop that destroys the sandbox but fails to release it must not restart coding.
+        job.stoppingResult = failed;
+        await save();
+        // A stop that fails keeps the job; the next poll finishes stopping it.
         try { await ops.pause(null); } catch { return null; }
       }
-      job.terminalResult = { ...job.progress, status: 'failed',
-        log: withLine(job.progress?.log, `${cause}. Starts kept failing for ${Math.round((now - job.startFailingSince) / 3_600_000)} hours. Existing branch and PR preserved.`) };
+      job.terminalResult = failed;
       return job.terminalResult;
     };
     if (job.attempt) {
@@ -142,6 +146,11 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
         throw error;
       });
       if (inspected && 'status' in inspected) return inspected;
+      // A timed-out inspection resolves null rather than throwing; it gets the same deadline check.
+      if (inspected === null) {
+        const ended = await endStartOutage('Runner sandbox cannot be inspected', false);
+        if (ended) return ended;
+      }
       const state = inspected ?? {
         running: false, progress: null,
         result: { ...job.progress, status: 'failed' as const, log: `${job.progress?.log ?? ''}\nRunner sandbox stopped responding. Restarting on a fresh runner.` },

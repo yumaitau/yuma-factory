@@ -556,3 +556,38 @@ test('an outage past its deadline also ends when a later poll cannot inspect the
   const healthy = fixture(1);
   await assert.rejects(recoverJob(healthy.bucket, 'run', 'account', { ...unreachable, pause: async () => assert.fail('No outage to end') }, MAX_START_FAILURE_MS * 10), /Sandbox unreachable/);
 });
+
+test('an expired outage also ends when a later inspection times out instead of failing', async () => {
+  const f = fixture(1);
+  f.job().startFailingSince = 0;
+  let stops = 0;
+  const wedged = { inspect: () => new Promise<never>(() => {}), start: async () => assert.fail('An expired outage never starts again'), pause: async () => { stops++; } };
+  const ended = await recoverJob(f.bucket, 'run', 'account', wedged, MAX_START_FAILURE_MS, false, 5);
+  assert.equal(ended.status, 'failed');
+  assert.match(ended.log, /Runner sandbox cannot be inspected\. Starts kept failing for 6 hours\./);
+  assert.equal(stops, 1);
+  // Without an expired outage, a timed-out inspection still schedules the usual recovery.
+  const healthy = fixture(1);
+  const waiting = await recoverJob(healthy.bucket, 'run', 'account', { ...wedged, pause: async () => {} }, MAX_START_FAILURE_MS, false, 5);
+  assert.equal(waiting.status, 'running');
+  assert.equal(healthy.job().terminalResult, undefined);
+});
+
+test('a stop that destroys the sandbox but cannot release it finishes on the next poll instead of restarting', async () => {
+  const f = fixture(1);
+  f.job().startFailingSince = 0;
+  const unreachable = { inspect: async () => { throw new Error('Sandbox unreachable.'); }, start: async () => assert.fail('A decided stop never restarts coding') };
+  await assert.rejects(recoverJob(f.bucket, 'run', 'account', { ...unreachable, pause: async () => { throw new Error("Could not release the stopped run's subscription."); } }, MAX_START_FAILURE_MS), /Sandbox unreachable/);
+  assert.equal(f.job().stoppingResult?.status, 'failed');
+  assert.equal(f.job().terminalResult, undefined);
+  // The next poll, even with the sandbox now reachable and empty, only retries the release.
+  let released = 0;
+  const ended = await recoverJob(f.bucket, 'run', 'account', {
+    inspect: async () => ({ running: false, result: null, progress: null }),
+    start: async () => assert.fail('A decided stop never restarts coding'),
+    pause: async () => { released++; },
+  }, MAX_START_FAILURE_MS + 20 * 60_000);
+  assert.equal(ended.status, 'failed');
+  assert.match(ended.log, /Starts kept failing for 6 hours/);
+  assert.equal(released, 1);
+});

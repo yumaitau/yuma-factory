@@ -112,6 +112,8 @@ jobs:
         PREVIOUS_VERSION: ${{ steps.previous.outputs.version }}
       run: pnpm exec wrangler rollback "$PREVIOUS_VERSION" --name yuma-factory --message "Automatic rollback of ${GITHUB_SHA:0:7} after a failed smoke test" -y
   sandbox:
+    # The runner's scripts are only tested by the root suite in `deploy`, and must not ship ahead of D1 migrations.
+    needs: deploy
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

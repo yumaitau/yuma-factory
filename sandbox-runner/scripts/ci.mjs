@@ -213,12 +213,14 @@ export async function finishWithGreenCI({ snapshot, repair, closeIssue, closeWit
 /**
  * Poll the merge commit on the default branch. repair() returns true when a
  * follow-up pull request has taken over the ticket.
+ * MAX_IDLE_REPAIRS in a row that change nothing stop the run.
  */
 export async function finishCommitCI({ snapshot, repair, done, progress, wait, now = Date.now }) {
   let greenHead = null;
   let pendingSince = null;
   let pendingHead = null;
   let emptySince = null;
+  let idleRepairs = 0;
   for (;;) {
     const current = await snapshot();
     // The PR already passed CI and merged. A default branch with no pipeline has nothing left to verify.
@@ -236,7 +238,11 @@ export async function finishCommitCI({ snapshot, repair, done, progress, wait, n
       greenHead = null;
       await progress("Main pipeline failed. Fixing it from the merge commit.");
       if (await repair(current)) return current.sha;
+      // repair() returns false when nothing changed. Each one is a full agent session, so they are limited.
+      if (++idleRepairs >= MAX_IDLE_REPAIRS)
+        throw Object.assign(new Error(`Main pipeline still failing after ${MAX_IDLE_REPAIRS} repairs that changed nothing. Ticket left open; subscription released.`), { retryable: false });
     } else if (current.state === "green") {
+      idleRepairs = 0;
       if (greenHead === current.sha) {
         await done(current.sha);
         return current.sha;
@@ -244,6 +250,7 @@ export async function finishCommitCI({ snapshot, repair, done, progress, wait, n
       greenHead = current.sha;
       await progress("Main pipeline green. Confirming the merge commit before finishing.");
     } else {
+      idleRepairs = 0;
       greenHead = null;
       pendingSince ??= now();
       // Missing/blocked pipelines need operator attention, not an occupied

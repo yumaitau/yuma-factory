@@ -34,7 +34,7 @@ export function e2eSessionPlugin(): BetterAuthPlugin {
             email,
             name: ctx.body.name,
             emailVerified: true,
-          });
+          }, { method: 'e2e' });
           if (!user) {
             throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Could not create user' });
           }

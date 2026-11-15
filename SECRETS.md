@@ -47,14 +47,17 @@ The morning digest runs only when `PAPERBOY_API_URL`, `PAPERBOY_API_KEY` and `PA
 | `LABEL_PREFIX` | var | Optional, default `factory`. Must match `NEXT_PUBLIC_LABEL_PREFIX` |
 | `COMMIT_AUTHOR_NAME` | var | Optional, default `Factory`. Author of agent commits |
 | `COMMIT_AUTHOR_EMAIL` | var | Optional, default `factory@users.noreply.github.com` |
+| `WORKERS_AI_TOKEN` | secret | Optional. Cloudflare API token limited to Workers AI. Needed only for Workers AI subscriptions; it stays with the runner and never reaches the agent |
+| `WORKERS_AI_ACCOUNT_ID` | var | Optional. The 32-character Cloudflare account ID that Workers AI runs bill to. Needed with `WORKERS_AI_TOKEN` |
+| `WORKERS_AI_MODEL` | var | Optional. Workers AI model, default `@cf/zai-org/glm-5.3-flash` |
 
-Codex logins and Claude subscription tokens are connected through the app and encrypted in the private `CODEX_VAULT` R2 bucket. They are not Worker environment secrets. No model API keys are required.
+Codex logins and Claude subscription tokens are connected through the app and encrypted in the private `CODEX_VAULT` R2 bucket. They are not Worker environment secrets. No model API keys are required. Workers AI subscriptions use the runner's `WORKERS_AI_TOKEN` instead of a login.
 
 ## External settings
 
 - Google OAuth redirect URI: `{BETTER_AUTH_URL}/api/auth/callback/google`.
 - GitHub App callback URL: `{BETTER_AUTH_URL}/api/github/callback`.
-- GitHub App webhook URL: `{BETTER_AUTH_URL}/api/github/webhook`. Subscribe to **Issues** events.
+- GitHub App webhook URL: `{BETTER_AUTH_URL}/api/github/webhook`. Subscribe to **Issues** and **Pull requests** events. Pull request events tell Factory that a PR's head moved, so checks recorded for the old commit stop counting at once.
 - GitHub App permissions: Contents, Issues and Pull requests read/write; Metadata, Administration, Checks, Commit statuses and Actions read. Actions read/write is optional: it lets Factory re-run CI jobs that GitHub blocked for billing or quota once the block is lifted.
 
 Device-code sign-in uses the official Codex authorization page. Claude subscriptions use a long-lived token from `claude setup-token` (Claude Pro or Max); Anthropic API keys are refused. Each subscription authorizes its own login. Owners control whether other team members may assign work to it.

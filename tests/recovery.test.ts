@@ -516,3 +516,43 @@ test('an attempt that dies before it was seen running keeps the recovery history
   }, 1000);
   assert.match(seen.job().progress?.log ?? '', /^Cloning\.\nAgent crashed\.\nAutomatic recovery scheduled for/);
 });
+
+test('starts that keep failing end the run at the deadline even when the sandbox cannot be inspected', async () => {
+  for (const inspect of [
+    async () => { throw new Error('Sandbox unreachable.'); },
+    // A wedged sandbox never answers; the bounded inspection gives up on its own.
+    () => new Promise<never>(() => {}),
+  ]) {
+    const f = fixture(0);
+    let stops = 0;
+    f.job().startFailingSince = 0;
+    const ops = { inspect, start: async () => { throw new Error('Subscription is not connected.'); }, pause: async () => { stops++; } };
+    const result = await recoverJob(f.bucket, 'run', 'account', ops, MAX_START_FAILURE_MS, false, 5);
+    assert.equal(result.status, 'failed');
+    assert.match(result.log, /Subscription is not connected\.\)\. Starts kept failing for 6 hours\. Existing branch and PR preserved\./);
+    // The sandbox is stopped before the subscription is released.
+    assert.equal(stops, 1);
+    assert.deepEqual(await recoverJob(f.bucket, 'run', 'account', { ...ops, start: async () => assert.fail('Run already ended') }, MAX_START_FAILURE_MS + 60_000, false, 5), result);
+  }
+});
+
+test('an outage past its deadline also ends when a later poll cannot inspect the sandbox at all', async () => {
+  const f = fixture(1);
+  f.job().startFailingSince = 0;
+  f.job().progress = { status: 'running', log: 'Runner/account/GitHub unavailable (Subscription is not connected.). Automatic retry at 2026-11-15T00:00:00.000Z; ticket remains open.' };
+  const unreachable = { inspect: async () => { throw new Error('Sandbox unreachable.'); }, start: async () => assert.fail('The sandbox cannot be inspected, so nothing is started') };
+  let stops = 0;
+  // Before the deadline the poll fails as it always has, and the job is kept.
+  await assert.rejects(recoverJob(f.bucket, 'run', 'account', { ...unreachable, pause: async () => { stops++; } }, MAX_START_FAILURE_MS - 1), /Sandbox unreachable/);
+  assert.deepEqual([stops, f.job().terminalResult], [0, undefined]);
+  // Past it, a sandbox that cannot be stopped is not released: the poll fails and the next one tries again.
+  await assert.rejects(recoverJob(f.bucket, 'run', 'account', { ...unreachable, pause: async () => { throw new Error('Destroy failed.'); } }, MAX_START_FAILURE_MS), /Sandbox unreachable/);
+  assert.equal(f.job().terminalResult, undefined);
+  const ended = await recoverJob(f.bucket, 'run', 'account', { ...unreachable, pause: async () => { stops++; } }, MAX_START_FAILURE_MS);
+  assert.equal(ended.status, 'failed');
+  assert.match(ended.log, /Automatic retry at[^\n]*\nRunner sandbox cannot be inspected\. Starts kept failing for 6 hours\. Existing branch and PR preserved\./);
+  assert.equal(stops, 1);
+  // A run with no start outage is never ended this way.
+  const healthy = fixture(1);
+  await assert.rejects(recoverJob(healthy.bucket, 'run', 'account', { ...unreachable, pause: async () => assert.fail('No outage to end') }, MAX_START_FAILURE_MS * 10), /Sandbox unreachable/);
+});

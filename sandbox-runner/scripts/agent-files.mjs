@@ -6,7 +6,16 @@ export async function readAgentFile(file, max = 64_000) {
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > max) throw new Error("Unexpected agent file.");
-    return await handle.readFile("utf8");
+    // The file may grow after stat(); cap the actual read as well.
+    const buffer = Buffer.alloc(max + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > max) throw new Error("Unexpected agent file.");
+    return buffer.subarray(0, length).toString("utf8");
   } finally {
     await handle.close();
   }

@@ -11,7 +11,6 @@ const nextConfig: NextConfig = {
     turbopackFileSystemCacheForDev: true,
     turbopackFileSystemCacheForBuild: true,
     instantInsights: { validationLevel: 'warning' },
-    exposeTestingApiInProductionBuild: true,
   },
 };
 

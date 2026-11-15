@@ -79,7 +79,7 @@ async function inspectWithin(ops: Operations, timeoutMs: number) {
 }
 
 /** R2 conditional writes serialize cron/UI polls, including after Worker restarts. */
-export async function recoverJob(bucket: R2Bucket, id: string, accountId: string, ops: Operations, now = Date.now(), cancel = false): Promise<RunResult> {
+export async function recoverJob(bucket: R2Bucket, id: string, accountId: string, ops: Operations, now = Date.now(), cancel = false, inspectTimeoutMs = INSPECT_TIMEOUT_MS): Promise<RunResult> {
   const key = `jobs/${id}`;
   const saved = await bucket.get(key);
   if (!saved) throw new Error('Durable job unavailable.');
@@ -121,8 +121,37 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
     }
     if (!job.request) throw new Error('Legacy run has no durable recovery request.');
     if (job.retryAt && job.retryAt > now) return waiting();
+    // Starts that keep failing end the run at the deadline, whether or not the sandbox can be inspected.
+    // The sandbox is stopped first: the subscription must not be released while code could still run.
+    const endStartOutage = async (cause: string, stopped: boolean): Promise<RunResult | null> => {
+      if (job.startFailingSince === undefined || now - job.startFailingSince < MAX_START_FAILURE_MS) return null;
+      const failed: RunResult = { ...job.progress, status: 'failed',
+        log: withLine(job.progress?.log, `${cause}. Starts kept failing for ${Math.round((now - job.startFailingSince) / 3_600_000)} hours. Existing branch and PR preserved.`) };
+      if (!stopped) {
+        if (!ops.pause) return null;
+        // Persist the decision first: a stop that destroys the sandbox but fails to release it must not restart coding.
+        job.stoppingResult = failed;
+        await save();
+        // A stop that fails keeps the job; the next poll finishes stopping it.
+        try { await ops.pause(null); } catch { return null; }
+      }
+      job.terminalResult = failed;
+      return job.terminalResult;
+    };
     if (job.attempt) {
-      const state = await inspectWithin(ops, INSPECT_TIMEOUT_MS) ?? {
+      const inspected = await inspectWithin(ops, inspectTimeoutMs).catch(async (error: unknown) => {
+        // A sandbox that cannot even be inspected never reaches another start, so the deadline is checked here too.
+        const ended = await endStartOutage('Runner sandbox cannot be inspected', false);
+        if (ended) return ended;
+        throw error;
+      });
+      if (inspected && 'status' in inspected) return inspected;
+      // A timed-out inspection resolves null rather than throwing; it gets the same deadline check.
+      if (inspected === null) {
+        const ended = await endStartOutage('Runner sandbox cannot be inspected', false);
+        if (ended) return ended;
+      }
+      const state = inspected ?? {
         running: false, progress: null,
         result: { ...job.progress, status: 'failed' as const, log: `${job.progress?.log ?? ''}\nRunner sandbox stopped responding. Restarting on a fresh runner.` },
       };
@@ -210,11 +239,12 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
       let stopped = false;
       let launched = false;
       try {
-        const state = await ops.inspect();
-        if (!state.running) {
+        // Bounded like every other inspection: a wedged sandbox must not hold the lease.
+        const state = await inspectWithin(ops, inspectTimeoutMs);
+        if (state && !state.running) {
           await ops.pause?.(state.result);
           stopped = true;
-        } else launched = true;
+        } else if (state) launched = true;
       } catch { /* Next poll reconciles an unreachable sandbox. */ }
       // Start errors come from the runner's own messages and the Sandbox SDK. The request file holds
       // GitHub and run tokens, so scrub token shapes in case a future SDK echoes what it wrote.
@@ -223,11 +253,8 @@ export async function recoverJob(bucket: R2Bucket, id: string, accountId: string
       // A start that launched despite the error is not an outage, even if it exits before the next poll.
       if (launched) delete job.startFailingSince;
       else job.startFailingSince ??= now;
-      if (stopped && job.startFailingSince !== undefined && now - job.startFailingSince >= MAX_START_FAILURE_MS) {
-        job.terminalResult = { ...job.progress, status: 'failed',
-          log: withLine(job.progress?.log, `Runner/account/GitHub unavailable${reason}. Starts kept failing for ${Math.round((now - job.startFailingSince) / 3_600_000)} hours. Existing branch and PR preserved.`) };
-        return job.terminalResult;
-      }
+      const ended = await endStartOutage(`Runner/account/GitHub unavailable${reason}`, stopped);
+      if (ended) return ended;
       job.retryAt = now + retryDelay(job.attempt);
       job.progress = { ...job.progress, status: 'running',
         log: withLine(job.progress?.log, `Runner/account/GitHub unavailable${reason}. Automatic retry at ${new Date(job.retryAt).toISOString()}; ticket remains open.`) };

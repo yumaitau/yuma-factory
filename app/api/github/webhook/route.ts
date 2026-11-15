@@ -60,7 +60,7 @@ async function handleIssueEvent(payload: {
     html_url: string;
     labels: Array<string | { name?: string }>;
     pull_request?: unknown;
-    user?: { type?: string } | null;
+    user?: { type?: string; login?: string } | null;
   };
   repository: { id: number };
 }) {
